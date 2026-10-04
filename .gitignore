@@ -1,0 +1,49 @@
+# Dependencias
+node_modules/
+
+# Compilacion y codigo generado
+dist/
+src/generated/
+*.tsbuildinfo
+
+# Pruebas
+coverage/
+.vitest/
+
+# Variables de entorno: solo se versiona la plantilla
+.env
+.env.*
+!.env.example
+
+# Secretos, certificados y respaldos de la base de datos
+*.pem
+*.key
+*.crt
+backups/
+*.dump
+*.sql.gz
+
+# Configuracion local de Docker y de herramientas
+docker-compose.override.yml
+.claude/settings.local.json
+
+# Logs y archivos temporales
+*.log
+npm-debug.log*
+*.tmp
+*.tmp.*
+.eslintcache
+
+# Reportes de diagnostico de Node
+report.*.json
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editores
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
