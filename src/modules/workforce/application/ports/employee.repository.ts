@@ -51,6 +51,7 @@ export interface EmployeeListFilter {
 }
 
 export interface CompanyCapacity {
+  readonly timezone: string;
   readonly maxEmployees: number;
   readonly activeEmployees: number;
 }
@@ -70,6 +71,11 @@ export interface EmployeeRepository {
   ): Promise<Page<EmployeeView>>;
   update(companyId: string, employeeId: string, patch: EmployeePatch): Promise<void>;
   setStatus(companyId: string, employeeId: string, status: EmployeeStatus): Promise<void>;
+  lockEmployee(companyId: string, employeeId: string): Promise<void>;
+  // Marcajes (incluso anulados) o reportes de cualquier dia
+  hasHistory(companyId: string, employeeId: string): Promise<boolean>;
+  // Borra al empleado y su cuenta, con sus sesiones y su historial de accesos
+  deleteAccount(companyId: string, employeeId: string): Promise<void>;
   revokeSessions(companyId: string, employeeId: string): Promise<void>;
   resetPassword(
     companyId: string,

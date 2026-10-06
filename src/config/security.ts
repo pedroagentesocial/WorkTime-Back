@@ -23,8 +23,12 @@ export const SECURITY = Object.freeze({
   },
 
   login: {
-    maxFailedAttempts: 5,
-    lockoutMinutes: 15,
+    maxFailedAttempts: 3,
+    // Bloqueo progresivo: 30 s y se duplica en cada reincidencia hasta el tope
+    lockoutBaseSeconds: 30,
+    lockoutMaxMinutes: 15,
+    // Pasado este tiempo sin reincidir el bloqueo vuelve al nivel inicial
+    lockoutResetMinutes: 15,
   },
 
   // Detras de un proxy hay que configurar trust proxy o todos los clientes compartiran IP

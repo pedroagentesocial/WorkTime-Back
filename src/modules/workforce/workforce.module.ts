@@ -12,6 +12,7 @@ import {
   GetEmployeeUseCase,
   ListEmployeesUseCase,
 } from './application/query-employees.use-cases.js';
+import { DeleteEmployeeUseCase } from './application/delete-employee.use-case.js';
 import { RevokeEmployeeSessionsUseCase } from './application/revoke-employee-sessions.use-case.js';
 import { ResetEmployeePasswordUseCase } from './application/reset-employee-password.use-case.js';
 import { UpdateEmployeeUseCase } from './application/update-employee.use-case.js';
@@ -32,6 +33,7 @@ declare module '#shared/composition/container.js' {
     changeEmployeeStatus: ChangeEmployeeStatusUseCase;
     resetEmployeePassword: ResetEmployeePasswordUseCase;
     revokeEmployeeSessions: RevokeEmployeeSessionsUseCase;
+    deleteEmployee: DeleteEmployeeUseCase;
   }
 }
 
@@ -51,6 +53,7 @@ export const workforceModule: AppModule = {
       changeEmployeeStatus: asClass(ChangeEmployeeStatusUseCase).singleton(),
       resetEmployeePassword: asClass(ResetEmployeePasswordUseCase).singleton(),
       revokeEmployeeSessions: asClass(RevokeEmployeeSessionsUseCase).singleton(),
+      deleteEmployee: asClass(DeleteEmployeeUseCase).singleton(),
     });
   },
 

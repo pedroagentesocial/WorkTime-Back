@@ -54,15 +54,15 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
 
   async lockCompanyCapacity(companyId: string): Promise<CompanyCapacity | null> {
     // FOR UPDATE: otra transaccion sobre la misma empresa espera a que esta termine
-    const rows = await this.db.client.$queryRaw<{ max_employees: number }[]>`
-      SELECT max_employees FROM companies WHERE id = ${companyId}::uuid FOR UPDATE`;
+    const rows = await this.db.client.$queryRaw<{ max_employees: number; timezone: string }[]>`
+      SELECT max_employees, timezone FROM companies WHERE id = ${companyId}::uuid FOR UPDATE`;
     const company = rows[0];
     if (!company) return null;
 
     const activeEmployees = await this.db.client.employee.count({
       where: { companyId, user: { status: 'active' } },
     });
-    return { maxEmployees: company.max_employees, activeEmployees };
+    return { timezone: company.timezone, maxEmployees: company.max_employees, activeEmployees };
   }
 
   async emailExists(email: string): Promise<boolean> {
@@ -197,6 +197,28 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
     });
   }
 
+  async lockEmployee(companyId: string, employeeId: string): Promise<void> {
+    await this.db.client.$queryRaw`
+      SELECT id FROM employees WHERE id = ${employeeId}::uuid AND company_id = ${companyId}::uuid FOR UPDATE`;
+  }
+
+  async hasHistory(companyId: string, employeeId: string): Promise<boolean> {
+    const rows = await this.db.client.$queryRaw<{ found: boolean }[]>`
+      SELECT (
+        EXISTS (SELECT 1 FROM time_entries WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
+        OR EXISTS (SELECT 1 FROM daily_reports WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
+      ) AS found`;
+    return rows[0]?.found === true;
+  }
+
+  async deleteAccount(companyId: string, employeeId: string): Promise<void> {
+    const userId = await this.userIdOf(companyId, employeeId);
+    await this.db.client.refreshToken.deleteMany({ where: { userId } });
+    await this.db.client.securityEvent.deleteMany({ where: { userId } });
+    await this.db.client.employee.deleteMany({ where: { id: employeeId, companyId } });
+    await this.db.client.user.deleteMany({ where: { id: userId, companyId } });
+  }
+
   async revokeSessions(companyId: string, employeeId: string): Promise<void> {
     const userId = await this.userIdOf(companyId, employeeId);
     await this.db.client.user.updateMany({
@@ -219,6 +241,7 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
         temporaryPasswordExpiresAt: password.expiresAt,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        lockLevel: 0,
         tokenVersion: { increment: 1 },
       },
     });

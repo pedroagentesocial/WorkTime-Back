@@ -10,6 +10,7 @@ import {
 import { CloseEntryOnDeactivationUseCase } from './application/close-entry-on-deactivation.use-case.js';
 import { AdminClockInUseCase, AdminClockOutUseCase } from './application/admin-clock.use-cases.js';
 import {
+  ExportCompanyDailyReportsUseCase,
   ListCompanyDailyReportsUseCase,
   ListDailyReportRevisionsUseCase,
   ListMyDailyReportsUseCase,
@@ -65,6 +66,7 @@ declare module '#shared/composition/container.js' {
     saveMyDailyReport: SaveMyDailyReportUseCase;
     listMyDailyReports: ListMyDailyReportsUseCase;
     listCompanyDailyReports: ListCompanyDailyReportsUseCase;
+    exportCompanyDailyReports: ExportCompanyDailyReportsUseCase;
     listDailyReportRevisions: ListDailyReportRevisionsUseCase;
     employeeDirectory: EmployeeDirectory;
     clockIn: ClockInUseCase;
@@ -109,6 +111,7 @@ export const timekeepingModule: AppModule = {
       saveMyDailyReport: asClass(SaveMyDailyReportUseCase).singleton(),
       listMyDailyReports: asClass(ListMyDailyReportsUseCase).singleton(),
       listCompanyDailyReports: asClass(ListCompanyDailyReportsUseCase).singleton(),
+      exportCompanyDailyReports: asClass(ExportCompanyDailyReportsUseCase).singleton(),
       listDailyReportRevisions: asClass(ListDailyReportRevisionsUseCase).singleton(),
       employeeDirectory: asClass(PrismaEmployeeDirectory).singleton(),
       clockIn: asClass(ClockInUseCase).singleton(),

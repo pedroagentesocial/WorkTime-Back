@@ -61,6 +61,18 @@ export const profileSchema = z
     company: z
       .object({ id: z.uuid(), code: z.string(), name: z.string(), timezone: z.string() })
       .nullable(),
+    employee: z
+      .object({
+        employeeCode: z
+          .string()
+          .openapi({ description: 'Código del empleado, por ejemplo KCS-0001.' }),
+        timezone: z.string().openapi({
+          description:
+            'Zona horaria efectiva: la propia del empleado o, si no tiene, la de la empresa.',
+        }),
+      })
+      .openapi({ description: 'Datos de empleado. Es null si el usuario no es empleado.' })
+      .or(z.null()),
     permissions: z.array(z.enum(Object.values(Permission) as [Permission, ...Permission[]])),
   })
   .openapi('CurrentUser');

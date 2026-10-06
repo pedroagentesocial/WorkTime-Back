@@ -24,10 +24,17 @@ describe('parseEnv', () => {
   it('acepta una configuración mínima y aplica valores por defecto', () => {
     const env = parseEnv(base);
     expect(env.port).toBe(3000);
+    expect(env.trustProxyHops).toBe(0);
     expect(env.corsOrigins).toEqual(['http://localhost:4200', 'https://app.example.com']);
     expect(env.jwt.accessTtlMs).toBe(15 * 60_000);
     expect(env.refreshTokenTtlMs).toBe(7 * 86_400_000);
     expect(env.isProduction).toBe(false);
+  });
+
+  it('acepta saltos de proxy y rechaza valores fuera de rango', () => {
+    expect(parseEnv({ ...base, TRUST_PROXY_HOPS: '1' }).trustProxyHops).toBe(1);
+    expect(issuesOf({ ...base, TRUST_PROXY_HOPS: '9' })).toHaveLength(1);
+    expect(issuesOf({ ...base, TRUST_PROXY_HOPS: '-1' })).toHaveLength(1);
   });
 
   it('el resultado es inmutable', () => {

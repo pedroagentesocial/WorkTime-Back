@@ -36,6 +36,8 @@ const envSchema = z
       error: 'Es obligatoria: development, test o production',
     }),
     PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
+    // Saltos de proxy de confianza delante de la API; 0 si nadie la antecede
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
     CORS_ORIGINS: z
       .string({ error: 'Es obligatoria' })
       .transform((value) =>
@@ -79,6 +81,7 @@ export interface Env {
   readonly isProduction: boolean;
   readonly isTest: boolean;
   readonly port: number;
+  readonly trustProxyHops: number;
   readonly corsOrigins: readonly string[];
   readonly databaseUrl: string;
   readonly jwt: {
@@ -108,6 +111,7 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     isProduction: v.NODE_ENV === 'production',
     isTest: v.NODE_ENV === 'test',
     port: v.PORT,
+    trustProxyHops: v.TRUST_PROXY_HOPS,
     corsOrigins: Object.freeze(v.CORS_ORIGINS),
     databaseUrl: v.DATABASE_URL,
     jwt: Object.freeze({ secret: v.JWT_SECRET, accessTtlMs: v.JWT_ACCESS_TTL }),

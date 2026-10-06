@@ -18,6 +18,7 @@ import type {
   ListMyPendingReportsUseCase,
 } from '../application/pending-reports.use-cases.js';
 import type {
+  ExportCompanyDailyReportsUseCase,
   ListCompanyDailyReportsUseCase,
   ListDailyReportRevisionsUseCase,
   ListMyDailyReportsUseCase,
@@ -47,6 +48,7 @@ import type {
   ListTimeEntryCorrectionsUseCase,
 } from '../application/query-time-entries.use-cases.js';
 import { companyTimesheetCsv } from './company-timesheet-csv.js';
+import { dailyReportsCsv } from './daily-reports-csv.js';
 import { centihoursToHours, durationSeconds, toDecimalHours } from '../domain/work-hours.js';
 import {
   adminClockInBody,
@@ -71,6 +73,7 @@ import {
   voidTimeEntryBody,
   companyDailyReportDto,
   companyDailyReportSchema,
+  companyDailyReportsExportQuery,
   companyDailyReportsQuery,
   dailyReportParams,
   dailyReportRevisionSchema,
@@ -112,6 +115,7 @@ interface Deps {
   saveMyDailyReport: SaveMyDailyReportUseCase;
   listMyDailyReports: ListMyDailyReportsUseCase;
   listCompanyDailyReports: ListCompanyDailyReportsUseCase;
+  exportCompanyDailyReports: ExportCompanyDailyReportsUseCase;
   listDailyReportRevisions: ListDailyReportRevisionsUseCase;
   adminClockOut: AdminClockOutUseCase;
   getMyTimesheet: GetMyTimesheetUseCase;
@@ -485,6 +489,40 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
           page: { page, limit },
         });
         return paginated(result.items.map(companyDailyReportDto), result);
+      },
+    }),
+
+    defineRoute({
+      method: 'get',
+      path: '/company/daily-reports/export',
+      summary: 'Exportar los reportes del día a CSV',
+      description:
+        'Los mismos reportes de `/company/daily-reports` (filtra por empleado y día laboral con ' +
+        '`from`/`to`), sin paginar, como archivo CSV (UTF-8). Con más de 5000 reportes hay que acotar ' +
+        'el rango.',
+      tags: COMPANY_TAGS,
+      auth: Permission.ATTENDANCE_READ_ALL,
+      rateLimit: 'export',
+      request: { query: companyDailyReportsExportQuery },
+      responses: {
+        200: { description: 'Archivo CSV', contentType: 'text/csv' },
+        400: {
+          description: 'Rango inválido o demasiados reportes',
+          errorCodes: ['INVALID_DATE_RANGE', 'EXPORT_TOO_LARGE'],
+        },
+        404: { description: 'Empleado inexistente', errorCodes: ['EMPLOYEE_NOT_FOUND'] },
+      },
+      handler: async ({ actor, query }) => {
+        const reports = await deps.exportCompanyDailyReports.execute({ actor, filter: query });
+        const range = [query.from, query.to].filter(Boolean).join('_');
+        return {
+          status: 200,
+          body: dailyReportsCsv(reports),
+          contentType: 'text/csv; charset=utf-8',
+          headers: {
+            'Content-Disposition': `attachment; filename="reportes-diarios${range ? `-${range}` : ''}.csv"`,
+          },
+        };
       },
     }),
 

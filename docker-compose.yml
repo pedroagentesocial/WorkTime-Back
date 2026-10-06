@@ -1,0 +1,50 @@
+# Usa el PostgreSQL del servidor: DATABASE_URL viene del .env; la plantilla es .env.example
+x-api-environment: &api-environment
+  NODE_ENV: production
+  PORT: 3000
+  DATABASE_URL: ${DATABASE_URL:?Define DATABASE_URL}
+  CORS_ORIGINS: ${CORS_ORIGINS:?Define CORS_ORIGINS}
+  TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-0}
+  JWT_SECRET: ${JWT_SECRET:?Define JWT_SECRET}
+  JWT_ACCESS_TTL: ${JWT_ACCESS_TTL:-15m}
+  REFRESH_TOKEN_TTL: ${REFRESH_TOKEN_TTL:-7d}
+
+# Permite usar host.docker.internal para llegar al PostgreSQL del propio servidor
+x-host-access: &host-access
+  extra_hosts:
+    - 'host.docker.internal:host-gateway'
+
+services:
+  # Aplica las migraciones y termina; tambien sirve para el seed
+  migrate:
+    <<: *host-access
+    build:
+      context: .
+      target: tools
+    restart: 'no'
+    environment:
+      <<: *api-environment
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-}
+
+  api:
+    <<: *host-access
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    init: true
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment: *api-environment
+    # Solo en el propio servidor; el acceso externo va por el proxy o Tailscale
+    ports:
+      - '127.0.0.1:${API_PORT:-3000}:3000'
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true

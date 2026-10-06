@@ -51,13 +51,15 @@ export class ChangePasswordUseCase implements UseCase<ChangePasswordInput, Issue
     const attempts = await users.reserveLoginAttempt(account.id, now);
     if (attempts === null) throw IdentityErrors.accountLocked();
     if (this.deps.loginLockoutPolicy.exceeded(attempts)) {
-      await users.lock(account.id, this.deps.loginLockoutPolicy.lockedUntil(now));
+      const { until, level } = this.deps.loginLockoutPolicy.nextLock(account, now);
+      await users.lock(account.id, until, level);
       throw IdentityErrors.accountLocked();
     }
 
     if (!(await passwordHasher.verify(account.passwordHash, input.currentPassword))) {
       if (this.deps.loginLockoutPolicy.shouldLock(attempts)) {
-        await users.lock(account.id, this.deps.loginLockoutPolicy.lockedUntil(now));
+        const { until, level } = this.deps.loginLockoutPolicy.nextLock(account, now);
+        await users.lock(account.id, until, level);
       }
       await securityEvents.record({ ...audit, type: SecurityEventType.PASSWORD_CHANGE_FAILED });
       throw IdentityErrors.invalidCurrentPassword();

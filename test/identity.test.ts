@@ -2,7 +2,7 @@ import request from 'supertest';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -83,32 +83,59 @@ describe('POST /auth/login', () => {
     expect(wrongPassword.body.error.code).toBe('INVALID_CREDENTIALS');
   });
 
-  it('bloquea la cuenta tras 5 intentos fallidos y la libera a los 15 minutos', async () => {
+  it('bloquea la cuenta tras 3 intentos fallidos y la libera a los 30 segundos', async () => {
     const { app, clock } = createTestApp();
     const { user } = await employeeSetup();
     const attempt = (password: string) =>
       request(app).post(api('/auth/login')).send({ email: user.email, password });
 
-    for (let i = 0; i < 5; i++) await attempt('incorrecta').expect(401);
+    for (let i = 0; i < 3; i++) await attempt('incorrecta').expect(401);
 
     const blocked = await attempt(DEFAULT_PASSWORD);
     expect(blocked.status).toBe(401);
     expect(blocked.body.error.code).toBe('INVALID_CREDENTIALS');
 
-    clock.advanceMinutes(14);
+    clock.advanceSeconds(29);
     await attempt(DEFAULT_PASSWORD).expect(401);
 
-    clock.advanceMinutes(2);
+    clock.advanceSeconds(2);
     await attempt(DEFAULT_PASSWORD).expect(200);
 
     const types = await eventTypes(user.id);
-    expect(types.filter((t) => t === 'login.failed')).toHaveLength(5);
+    expect(types.filter((t) => t === 'login.failed')).toHaveLength(3);
     expect(types).toContain('account.locked');
     expect(types).toContain('login.blocked');
     expect(types.at(-1)).toBe('login.succeeded');
   });
 
-  it('una ráfaga de 20 intentos en paralelo evalúa como máximo 5 contraseñas', async () => {
+  it('el bloqueo es progresivo: cada reincidencia duplica la espera y un acierto lo reinicia', async () => {
+    const { app, clock } = createTestApp();
+    const { user } = await employeeSetup();
+    const attempt = (password: string) =>
+      request(app).post(api('/auth/login')).send({ email: user.email, password });
+    const failThree = async () => {
+      for (let i = 0; i < 3; i++) await attempt('incorrecta').expect(401);
+    };
+    const lockedUntil = async () =>
+      (await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).lockedUntil;
+
+    await failThree();
+    const first = await lockedUntil();
+    expect(first?.getTime()).toBe(clock.now().getTime() + 30_000);
+
+    clock.advanceSeconds(31);
+    await failThree();
+    const second = await lockedUntil();
+    expect(second?.getTime()).toBe(clock.now().getTime() + 60_000);
+
+    clock.advanceSeconds(61);
+    await attempt(DEFAULT_PASSWORD).expect(200);
+    await failThree();
+    const reset = await lockedUntil();
+    expect(reset?.getTime()).toBe(clock.now().getTime() + 30_000);
+  });
+
+  it('una ráfaga de 20 intentos en paralelo evalúa como máximo 3 contraseñas', async () => {
     const { app } = createTestApp();
     const { user } = await employeeSetup();
 
@@ -122,7 +149,7 @@ describe('POST /auth/login', () => {
     const evaluated = await prisma.securityEvent.count({
       where: { userId: user.id, type: 'login.failed' },
     });
-    expect(evaluated).toBeLessThanOrEqual(5);
+    expect(evaluated).toBeLessThanOrEqual(3);
     await request(app)
       .post(api('/auth/login'))
       .send({ email: user.email, password: DEFAULT_PASSWORD })
@@ -135,9 +162,9 @@ describe('POST /auth/login', () => {
     const attempt = (password: string) =>
       request(app).post(api('/auth/login')).send({ email: user.email, password });
 
-    for (let i = 0; i < 4; i++) await attempt('incorrecta').expect(401);
+    for (let i = 0; i < 2; i++) await attempt('incorrecta').expect(401);
     await attempt(DEFAULT_PASSWORD).expect(200);
-    for (let i = 0; i < 4; i++) await attempt('incorrecta').expect(401);
+    for (let i = 0; i < 2; i++) await attempt('incorrecta').expect(401);
     await attempt(DEFAULT_PASSWORD).expect(200);
   });
 
@@ -188,6 +215,40 @@ describe('POST /auth/login', () => {
       .send({ email: user.email, password: DEFAULT_PASSWORD });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('TEMPORARY_PASSWORD_EXPIRED');
+  });
+
+  it('el empleado ve solo su código y su zona efectiva; los admins reciben null', async () => {
+    const { app } = createTestApp();
+    const company = await createCompany(prisma);
+    const other = await createCompany(prisma);
+    const inherits = await createEmployee(prisma, company.id);
+    const own = await createEmployee(prisma, company.id, { timezone: 'America/Mexico_City' });
+    await createEmployee(prisma, other.id);
+    const admin = await createUser(prisma, { role: Role.COMPANY_ADMIN, companyId: company.id });
+    const platform = await createUser(prisma, { role: Role.PLATFORM_ADMIN });
+
+    const meOf = async (email: string) => {
+      const session = await login(app, email, DEFAULT_PASSWORD);
+      const res = await request(app).get(api('/auth/me')).set(bearer(session.accessToken));
+      return res.body.data.employee;
+    };
+
+    expect(await meOf(inherits.user.email)).toEqual({
+      employeeCode: inherits.employee.employeeCode,
+      timezone: 'America/Denver',
+    });
+    expect(await meOf(own.user.email)).toEqual({
+      employeeCode: own.employee.employeeCode,
+      timezone: 'America/Mexico_City',
+    });
+    expect(await meOf(admin.email)).toBeNull();
+    expect(await meOf(platform.email)).toBeNull();
+
+    const loginRes = await request(app)
+      .post(api('/auth/login'))
+      .send({ email: own.user.email, password: DEFAULT_PASSWORD })
+      .expect(200);
+    expect(loginRes.body.data.user.employee.employeeCode).toBe(own.employee.employeeCode);
   });
 
   it('el admin global (sin empresa) puede iniciar sesión', async () => {
@@ -616,7 +677,7 @@ describe('PATCH /auth/me/password', () => {
         .set(bearer(session.accessToken))
         .send({ currentPassword: 'adivinando', newPassword: NEW_PASSWORD });
 
-    for (let i = 0; i < 5; i++) await change().expect(400);
+    for (let i = 0; i < 3; i++) await change().expect(400);
     const locked = await change();
     expect(locked.status).toBe(429);
     expect(locked.body.error.code).toBe('ACCOUNT_LOCKED');

@@ -8,11 +8,11 @@ Backend (solo API) de **control de asistencia multiempresa** tipo OnTheClock. Ho
 
 El front de pruebas (simulador legacy, HTML y JS sin build) vive en un repositorio o carpeta aparte, `WorkTime-Front`. Se levanta con `node server.js` y se abre en http://localhost:4200, el único origen que permite el CORS. Debe actualizarse cuando cambia un endpoint.
 
-| Rol (valor en BD) | Qué hace |
-| --- | --- |
-| `platform_admin` | Admin global: crea, edita y suspende empresas y su admin. Sin empresa. Se crea con el seed. |
-| `company_admin` | Uno por empresa. Gestiona empresa y empleados, ve y corrige asistencia. **No marca asistencia propia.** |
-| `employee` | Marca entrada y salida y consulta su historial. |
+| Rol (valor en BD) | Qué hace                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------- |
+| `platform_admin`  | Admin global: crea, edita y suspende empresas y su admin. Sin empresa. Se crea con el seed.             |
+| `company_admin`   | Uno por empresa. Gestiona empresa y empleados, ve y corrige asistencia. **No marca asistencia propia.** |
+| `employee`        | Marca entrada y salida y consulta su historial.                                                         |
 
 Los endpoints nunca preguntan por un rol, solo por un **permiso** (`src/shared/domain/permissions.ts`). Un rol nuevo es una entrada en `ROLE_PERMISSIONS`.
 
@@ -35,6 +35,7 @@ Node 24 · TypeScript 5.9.3 (no subir: typescript-eslint soporta `<6.1`) · Expr
 `package.json` tiene `overrides` para `deepmerge-ts` y `mysql2`. `npm audit` solo marca `braces` (sin arreglo, riesgo aceptado en `docs/security.md`): no uses `npm audit fix --force`.
 
 **Prisma 7:**
+
 - La URL de la BD va en `prisma.config.ts` (carga `.env` con dotenv), no en `schema.prisma`.
 - El cliente se genera en `src/generated/prisma` y se importa desde `#generated/prisma/client.js`, no desde `@prisma/client`.
 - El driver adapter es obligatorio (`PrismaPg`).
@@ -56,6 +57,7 @@ src/
 Cada módulo tiene `domain/` (reglas puras), `application/` (casos de uso y `ports/`), `infrastructure/` (repositorios Prisma), `presentation/` (rutas y esquemas Zod) y `<modulo>.module.ts`. **ESLint impone las capas:** `domain` no importa librerías ni otras capas; `application` no importa infraestructura, Express, Prisma, Awilix ni Zod.
 
 **Piezas clave**
+
 - **`defineRoute`** (`src/shared/http/route.ts`): una declaración da método, ruta, `auth` (obligatorio: `'public' | 'authenticated' | Permission`), `rateLimit`, esquemas, respuestas con `errorCodes` y handler. De ahí salen validación, autenticación, permiso, rate limit y Swagger.
 - **Pipeline:** rate limit → token → cambio de contraseña pendiente → permiso → validación Zod → handler → manejador de errores.
 - **DI:** cada clase recibe `constructor({ dep1 }: Deps)`; cada módulo amplía `Cradle`. Las claves del contenedor son únicas.
@@ -68,6 +70,7 @@ Cada módulo tiene `domain/` (reglas puras), `application/` (casos de uso y `por
 - **Imports:** aliases `#config/*`, `#shared/*`, `#modules/*`, `#generated/*`, con extensión `.js`.
 
 **Cómo agregar cosas**
+
 - **Endpoint:** caso de uso + test unitario → repositorio si hace falta → esquema Zod → `defineRoute` con `auth` y `errorCodes` → registrarlo en el `.module.ts` → test e2e → **`npm run docs:api`** (un test falla si `API.md` quedó desactualizado o si un `errorCodes` no lo lanza nada). Si cambias una regla que describe la guía, edita `docs/api-guide.md` a mano.
 - **Módulo:** copiar `system` o `workforce`, exportar un `AppModule` y agregarlo a `src/modules/index.ts`.
 - **Campo en una entidad:** `schema.prisma` + migración, vista del puerto, mapeo del repositorio, esquema Zod y regla de dominio.
@@ -86,13 +89,13 @@ npm run db:seed          # crea el admin global si no existe
 npm run docs:api         # regenera API.md
 ```
 
-`.env` (plantilla en `.env.example`): `NODE_ENV` (obligatoria), `PORT`, `CORS_ORIGINS`, `DATABASE_URL`, `JWT_SECRET` (≥64 caracteres, se rechazan valores de ejemplo), `JWT_ACCESS_TTL`, `REFRESH_TOKEN_TTL`, `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`. Se validan con Zod en `src/config/env.ts`. Las políticas que no son secretos están en `src/config/security.ts`.
+`.env` (plantilla en `.env.example`): `NODE_ENV` (obligatoria), `PORT`, `TRUST_PROXY_HOPS`, `CORS_ORIGINS`, `DATABASE_URL`, `JWT_SECRET` (≥64 caracteres, se rechazan valores de ejemplo), `JWT_ACCESS_TTL`, `REFRESH_TOKEN_TTL`, `SEED_ADMIN_EMAIL`, `SEED_ADMIN_PASSWORD`. Se validan con Zod en `src/config/env.ts`. Las políticas que no son secretos están en `src/config/security.ts`.
 
 **BD local:** PostgreSQL en `localhost:5432`; desarrollo `worktime`, tests `worktime_test` (se deriva del `.env` agregando `_test`, se crea y migra sola; los tests se niegan a usar una BD que no termine en `_test`). **Nunca modifiques una migración ya aplicada** (cambia su checksum): crea una nueva.
 
 ## 6. Decisiones de dominio (resumen; el detalle está en `API.md` y `docs/api-guide.md`)
 
-- IDs **UUID v7** generados por la app; fechas `timestamptz`; nada de borrado en cascada (se desactiva o suspende). Índices únicos parciales: una entrada abierta (no anulada) por empleado y un `company_admin` por empresa.
+- IDs **UUID v7** generados por la app; fechas `timestamptz`; nada de borrado en cascada (se desactiva o suspende; la única excepción es eliminar a un empleado que nunca registró horas ni reportes, `DELETE /company/employees/{id}`, que borra su cuenta y su historial de accesos y deja el evento `employee.deleted`). Índices únicos parciales: una entrada abierta (no anulada) por empleado y un `company_admin` por empresa.
 - **Zonas horarias:** todo instante en UTC; el empleado tiene zona IANA (si es `NULL`, hereda la de la empresa; por defecto `America/Denver`). Cada marcaje guarda una foto de `timezone` y `workDate` (día local de la entrada; los turnos nocturnos cuentan para ese día). Nunca desfases fijos. Los marcajes los registra el servidor con su hora.
 - **Horas decimales:** segundos enteros como fuente de verdad; salida con 2 decimales, `floor((segundos + 18) / 36)` centésimas, redondeo **por marcaje** y luego suma (el SQL repite la fórmula).
 - **Límite diario** (empresa y empleado; el del empleado manda; 1 a 1440 min): cierra la entrada en el instante exacto del límite (`closedBy: daily_limit`), con tarea periódica. El admin puede autorizar horas extra con `overrideDailyLimit`.
@@ -103,11 +106,12 @@ npm run docs:api         # regenera API.md
 - **Sesiones:** `users.token_version` anula todos los access y refresh tokens al incrementarse (cambio o reset de contraseña, desactivación, `logout-all`, `revoke-sessions`). Solo se puede cerrar todas las sesiones, no una sola.
 - **Limpieza** (`modules/maintenance`, `src/config/retention.ts`): borra sesiones completas viejas y `security_events` de más de 365 días, salvo las acciones del admin sobre la asistencia. Registros de horas, correcciones, reportes y cierres nunca se borran.
 - **Actividad del admin** (`GET /company/activity`): solo sus acciones sobre la asistencia, sin inicios de sesión ni IPs.
+- **Exportaciones CSV** (hoja de tiempo y reportes diarios, `presentation/csv.ts`): UTF-8 con BOM, textos que empiezan con `= + - @` con apóstrofo delante y límite `export`. La de reportes se acota a 5000 filas (`EXPORT_TOO_LARGE`).
 - La documentación de la API se genera con `npm run docs:api` (`scripts/build-api-docs.ts` a partir del OpenAPI y `docs/api-guide.md`).
 
 ## 7. Seguridad (detalle en `docs/security.md`)
 
-Contraseñas con argon2id · access token JWT de 15 min (se verifica en la BD en cada petición usuario, empresa, `tokenVersion`, rol y empresa) · refresh tokens opacos, hasheados, rotativos, con detección de reuso y duración máxima de 30 días · bloqueo de 5 intentos por 15 min · contraseñas temporales de 16 caracteres que vencen en 72 h · rate limit por IP y por acción (`heavyRead`, `export`, `sensitive`) · Zod `.strict()`, solo JSON, cuerpo máximo de 100 KB, helmet, CORS con lista blanca, `Cache-Control: no-store` · fechas de timekeeping limitadas a los años 2000 a 2100 · logs con redacción de secretos · auditoría en `security_events`. Hubo dos revisiones independientes con hallazgos corregidos.
+Contraseñas con argon2id · access token JWT de 15 min (se verifica en la BD en cada petición usuario, empresa, `tokenVersion`, rol y empresa) · refresh tokens opacos, hasheados, rotativos, con detección de reuso y duración máxima de 30 días · bloqueo progresivo tras 3 intentos (30 s, se duplica hasta 15 min) · contraseñas temporales de 16 caracteres que vencen en 72 h · rate limit por IP y por acción (`heavyRead`, `export`, `sensitive`) · Zod `.strict()`, solo JSON, cuerpo máximo de 100 KB, helmet, CORS con lista blanca, `Cache-Control: no-store` · fechas de timekeeping limitadas a los años 2000 a 2100 · logs con redacción de secretos · auditoría en `security_events`. Hubo dos revisiones independientes con hallazgos corregidos.
 
 ## 8. Tests
 
@@ -122,7 +126,7 @@ Contraseñas con argon2id · access token JWT de 15 min (se verifica en la BD en
 
 **MVP completo y endurecido** para los tres roles.
 
-**Siguiente fase, solo cuando el usuario lo pida:** Docker y despliegue (Dockerfile multi-stage sin root, docker-compose con web, api y db con volumen, HTTPS vía Tailscale, **`trust proxy`** con los saltos reales del proxy —sin eso el rate limit ve una sola IP—, dos usuarios de PostgreSQL, `db:deploy`, respaldos diarios con prueba de restauración, CI con GitHub Actions: lint, typecheck, tests y audit).
+**Docker (hecho para la api):** `Dockerfile` multi-stage sin root y `docker-compose.yml` con `migrate` (`prisma migrate deploy` y seed) y `api` (publicada solo en 127.0.0.1, `TRUST_PROXY_HOPS` por `.env`). Usa el PostgreSQL del servidor: la base se crea a mano y su `DATABASE_URL` va en el `.env` (host `host.docker.internal`). Guía en `docs/deployment.md`. **Falta, solo cuando el usuario lo pida:** contenedor del front, HTTPS vía Tailscale, respaldos diarios con prueba de restauración, CI con GitHub Actions (lint, typecheck, tests y audit).
 
 **Aplazado:** correos con Resend (recuperación de contraseña, invitación; requiere dominio verificado). **Por confirmar:** pruebas de carga y concurrencia, front real nuevo, periodos configurables por empresa.
 

@@ -1,0 +1,16 @@
+node_modules
+dist
+coverage
+.git
+.claude
+.env
+.env.*
+!.env.example
+src/generated
+test
+docs
+*.md
+!README.md
+Dockerfile
+docker-compose.yml
+.dockerignore

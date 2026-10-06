@@ -118,8 +118,8 @@ export class LoginUseCase implements UseCase<LoginInput, LoginOutput> {
   }
 
   private async lock(account: UserAccount, now: Date, audit: Audit): Promise<void> {
-    const until = this.deps.loginLockoutPolicy.lockedUntil(now);
-    await this.deps.userAccountRepository.lock(account.id, until);
+    const { until, level } = this.deps.loginLockoutPolicy.nextLock(account, now);
+    await this.deps.userAccountRepository.lock(account.id, until, level);
     await this.deps.securityEvents.record({
       ...audit,
       type: SecurityEventType.ACCOUNT_LOCKED,

@@ -18,6 +18,7 @@ import type {
   GetEmployeeUseCase,
   ListEmployeesUseCase,
 } from '../application/query-employees.use-cases.js';
+import type { DeleteEmployeeUseCase } from '../application/delete-employee.use-case.js';
 import type { RevokeEmployeeSessionsUseCase } from '../application/revoke-employee-sessions.use-case.js';
 import type { ResetEmployeePasswordUseCase } from '../application/reset-employee-password.use-case.js';
 import type { UpdateEmployeeUseCase } from '../application/update-employee.use-case.js';
@@ -44,6 +45,7 @@ interface Deps {
   changeEmployeeStatus: ChangeEmployeeStatusUseCase;
   resetEmployeePassword: ResetEmployeePasswordUseCase;
   revokeEmployeeSessions: RevokeEmployeeSessionsUseCase;
+  deleteEmployee: DeleteEmployeeUseCase;
 }
 
 const COMPANY_TAGS = ['Empresa · Configuración'];
@@ -212,6 +214,33 @@ export function workforceRoutes(deps: Deps): AnyRoute[] {
             }),
           ),
         ),
+    }),
+
+    defineRoute({
+      method: 'delete',
+      path: '/company/employees/:id',
+      summary: 'Eliminar un empleado',
+      description:
+        'Solo funciona con un empleado que nunca registró horas ni reportes (por ejemplo un alta ' +
+        'por error). Borra su cuenta y su historial de accesos, libera su correo y su lugar en el ' +
+        'tope de empleados; su código no se reutiliza. Con historial responde `409 ' +
+        'EMPLOYEE_HAS_HISTORY`: desactívalo en su lugar.',
+      tags: EMPLOYEE_TAGS,
+      auth: Permission.EMPLOYEES_MANAGE,
+      rateLimit: 'sensitive',
+      request: { params: idParams },
+      responses: {
+        204: { description: 'Empleado eliminado' },
+        404: EMPLOYEE_NOT_FOUND,
+        409: {
+          description: 'El empleado ya tiene historial',
+          errorCodes: ['EMPLOYEE_HAS_HISTORY'],
+        },
+      },
+      handler: async ({ actor, params, request }) => {
+        await deps.deleteEmployee.execute({ actor, client: request, employeeId: params.id });
+        return noContent();
+      },
     }),
 
     defineRoute({

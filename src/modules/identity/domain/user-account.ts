@@ -11,6 +11,11 @@ export interface AccountCompany {
   readonly status: CompanyStatus;
 }
 
+export interface AccountEmployee {
+  readonly employeeCode: string;
+  readonly timezone: string;
+}
+
 export interface UserAccountProps {
   readonly id: string;
   readonly email: string;
@@ -23,7 +28,9 @@ export interface UserAccountProps {
   readonly temporaryPasswordExpiresAt: Date | null;
   readonly tokenVersion: number;
   readonly lockedUntil: Date | null;
+  readonly lockLevel: number;
   readonly company: AccountCompany | null;
+  readonly employee?: AccountEmployee | null;
 }
 
 export type AccessDenial = 'USER_INACTIVE' | 'COMPANY_SUSPENDED' | 'TEMPORARY_PASSWORD_EXPIRED';
@@ -59,8 +66,17 @@ export class UserAccount {
   get tokenVersion(): number {
     return this.props.tokenVersion;
   }
+  get lockedUntil(): Date | null {
+    return this.props.lockedUntil;
+  }
+  get lockLevel(): number {
+    return this.props.lockLevel;
+  }
   get company(): AccountCompany | null {
     return this.props.company;
+  }
+  get employee(): AccountEmployee | null {
+    return this.props.employee ?? null;
   }
   get companyId(): string | null {
     return this.props.company?.id ?? null;

@@ -91,6 +91,45 @@ export class ListCompanyDailyReportsUseCase implements UseCase<
   }
 }
 
+export const MAX_REPORT_EXPORT_ROWS = 5000;
+const EXPORT_PAGE_SIZE = 100;
+
+export interface ExportDailyReportsInput {
+  readonly actor: Actor;
+  readonly filter: DailyReportFilter;
+}
+
+export class ExportCompanyDailyReportsUseCase implements UseCase<
+  ExportDailyReportsInput,
+  DailyReportView[]
+> {
+  constructor(private readonly deps: ListDeps) {}
+
+  async execute({ actor, filter }: ExportDailyReportsInput): Promise<DailyReportView[]> {
+    assertValidWorkDateRange(filter);
+    const companyId = companyIdOf(actor);
+    if (
+      filter.employeeId &&
+      !(await this.deps.employeeDirectory.exists(companyId, filter.employeeId))
+    ) {
+      throw TimekeepingErrors.employeeNotFound();
+    }
+
+    const reports: DailyReportView[] = [];
+    for (let page = 1; ; page += 1) {
+      const result = await this.deps.dailyReportRepository.list(companyId, filter, {
+        page,
+        limit: EXPORT_PAGE_SIZE,
+      });
+      if (result.total > MAX_REPORT_EXPORT_ROWS) {
+        throw TimekeepingErrors.exportTooLarge(MAX_REPORT_EXPORT_ROWS);
+      }
+      reports.push(...result.items);
+      if (result.items.length === 0 || reports.length >= result.total) return reports;
+    }
+  }
+}
+
 export interface DailyReportByIdInput {
   readonly actor: Actor;
   readonly reportId: string;

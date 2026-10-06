@@ -198,7 +198,8 @@ export const clockStatusSchema = z
           .openapi({ description: 'true: la empresa exige el reporte al marcar salida' }),
         workDate: workDate,
         content: z.string().nullable().openapi({
-          description: 'Reporte ya escrito ese día, para mostrarlo cargado al marcar salida',
+          description:
+            'Reporte ya escrito ese día, para mostrarlo cargado al marcar salida. Es Markdown.',
         }),
       })
       .openapi({ description: 'Reporte del día de la entrada abierta, o de hoy si no hay' }),
@@ -276,7 +277,7 @@ export const clockOutBody = z
   .object({
     dailyReport: z.string().max(DAILY_REPORT_LIMITS.max).optional().openapi({
       description:
-        'Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior.',
+        'Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior. Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve.',
     }),
   })
   .strict()
@@ -371,7 +372,12 @@ export function activityDto(view: AttendanceActivityView) {
 export const dailyReportParams = z.object({ date: workDate });
 
 export const saveDailyReportBody = z
-  .object({ content: z.string().max(DAILY_REPORT_LIMITS.max) })
+  .object({
+    content: z.string().max(DAILY_REPORT_LIMITS.max).openapi({
+      description:
+        'Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve. Los límites de 10 a 2000 caracteres cuentan el texto tal como se guarda, con sus marcas.',
+    }),
+  })
   .strict()
   .openapi('SaveDailyReportRequest');
 
@@ -384,10 +390,16 @@ export const companyDailyReportsQuery = dailyReportsQuery.extend({
   employeeId: uuidSchema.optional(),
 });
 
+export const companyDailyReportsExportQuery = z.object({
+  from: dailyReportsQuery.shape.from,
+  to: dailyReportsQuery.shape.to,
+  employeeId: uuidSchema.optional(),
+});
+
 const dailyReportFields = {
   id: z.uuid(),
   workDate: workDate,
-  content: z.string(),
+  content: z.string().openapi({ description: 'Texto del reporte en Markdown' }),
   revisions: z.number().int().openapi({ description: 'Versiones anteriores conservadas' }),
   createdAt: z.iso.datetime(),
   updatedAt: z.iso.datetime(),

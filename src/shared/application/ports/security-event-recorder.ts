@@ -23,6 +23,7 @@ export const SecurityEventType = {
   EMPLOYEE_UPDATED: 'employee.updated',
   EMPLOYEE_DEACTIVATED: 'employee.deactivated',
   EMPLOYEE_REACTIVATED: 'employee.reactivated',
+  EMPLOYEE_DELETED: 'employee.deleted',
   TIME_ENTRY_CLOCKED_IN_BY_ADMIN: 'time_entry.clocked_in_by_admin',
   TIME_ENTRY_CLOCKED_OUT_BY_ADMIN: 'time_entry.clocked_out_by_admin',
   TIME_ENTRY_CREATED_BY_ADMIN: 'time_entry.created_by_admin',

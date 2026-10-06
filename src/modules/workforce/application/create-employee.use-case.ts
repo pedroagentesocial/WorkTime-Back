@@ -1,5 +1,6 @@
 import { companyIdOf, type Actor } from '#shared/application/actor.js';
 import type { ClientInfo } from '#shared/application/client-info.js';
+import type { Clock } from '#shared/application/ports/clock.js';
 import type { IdGenerator } from '#shared/application/ports/id-generator.js';
 import {
   SecurityEventType,
@@ -8,6 +9,7 @@ import {
 import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
 import type { TemporaryPasswordIssuer } from '#shared/application/temporary-password-issuer.js';
 import type { UseCase } from '#shared/application/use-case.js';
+import { localDateOf, resolveTimezone } from '#shared/domain/timezone.js';
 import { EmployeeRules } from '../domain/employee-rules.js';
 import type { EmployeeRepository, EmployeeView } from './ports/employee.repository.js';
 import { WorkforceErrors } from './workforce-errors.js';
@@ -35,6 +37,7 @@ interface Deps {
   temporaryPasswords: TemporaryPasswordIssuer;
   idGenerator: IdGenerator;
   securityEvents: SecurityEventRecorder;
+  clock: Clock;
 }
 
 export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, CreateEmployeeOutput> {
@@ -60,6 +63,10 @@ export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, Creat
 
       if (await employees.emailExists(email)) throw WorkforceErrors.emailTaken();
       const employeeCode = await employees.nextEmployeeCode(companyId);
+      // Sin fecha de ingreso explicita, es el dia del alta en la zona horaria del empleado
+      const hiredAt =
+        input.hiredAt ??
+        localDateOf(this.deps.clock.now(), resolveTimezone(timezone, capacity.timezone));
 
       await employees.create({
         companyId,
@@ -70,7 +77,7 @@ export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, Creat
         lastName: input.lastName.trim(),
         employeeCode,
         phone,
-        hiredAt: input.hiredAt ?? null,
+        hiredAt,
         timezone,
         passwordHash: temporary.passwordHash,
         temporaryPasswordExpiresAt: temporary.expiresAt,

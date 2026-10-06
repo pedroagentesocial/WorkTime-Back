@@ -84,7 +84,10 @@ export const createEmployeeBody = z
     firstName: personNameSchema.openapi({ example: 'Ana' }),
     lastName: personNameSchema.openapi({ example: 'López' }),
     phone: phone.optional(),
-    hiredAt: hiredAt.optional(),
+    hiredAt: hiredAt.optional().openapi({
+      description:
+        'Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado.',
+    }),
     timezone: employeeTimezone.optional(),
   })
   .strict()

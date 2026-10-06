@@ -18,7 +18,7 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 - JWT HS256 de 15 min con algoritmo fijado, `iss`/`aud`/`exp` obligatorios.
 - En cada petición se verifica en la BD: usuario activo, empresa activa, `tokenVersion`, rol y empresa.
 - Refresh tokens opacos, guardados como SHA-256, rotativos, con detección de reuso (revoca la sesión entera), ligados a `tokenVersion` y con duración máxima absoluta de 30 días.
-- Bloqueo tras 5 intentos fallidos (15 min), con reserva atómica del intento: ni con ráfagas en paralelo se prueban más contraseñas.
+- Bloqueo tras 3 intentos fallidos: 30 s, duplicándose en cada reincidencia hasta 15 min (`users.lock_level`, se reinicia al entrar bien o tras 15 min sin reincidir), con reserva atómica del intento: ni con ráfagas en paralelo se prueban más contraseñas.
 - Login sin enumeración: mismo mensaje y trabajo equivalente para email inexistente, contraseña incorrecta o cuenta bloqueada.
 - Contraseñas temporales aleatorias (CSPRNG), vencen en 72 h, obligan a cambiarse y no sirven para renovar sesión una vez vencidas.
 
@@ -44,12 +44,12 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 
 ## Riesgos aceptados (documentados)
 
-| Riesgo                                                                           | Motivo                                               | Mitigación                                                           |
-| -------------------------------------------------------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------- |
-| Un admin de empresa puede saber si un email existe en el sistema (`EMAIL_TAKEN`) | El email es la identidad de acceso y es único global | Requiere crear usuarios; queda auditado                              |
-| Tras logout, el access token vive hasta 15 min                                   | JWT sin estado                                       | Vida corta; cambio de contraseña/desactivación lo anulan al instante |
-| Dos pestañas que renuevan a la vez pueden cerrar la sesión                       | Es la detección de reuso funcionando                 | El cliente vuelve a iniciar sesión                                   |
-| Un atacante puede bloquear 15 min una cuenta conocida                            | Contrapartida del bloqueo por intentos               | Bloqueo temporal; el admin puede restablecer la contraseña           |
+| Riesgo                                                                                            | Motivo                                                    | Mitigación                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Un admin de empresa puede saber si un email existe en el sistema (`EMAIL_TAKEN`)                  | El email es la identidad de acceso y es único global      | Requiere crear usuarios; queda auditado                                                                                                                                                                                  |
+| Tras logout, el access token vive hasta 15 min                                                    | JWT sin estado                                            | Vida corta; cambio de contraseña/desactivación lo anulan al instante                                                                                                                                                     |
+| Dos pestañas que renuevan a la vez pueden cerrar la sesión                                        | Es la detección de reuso funcionando                      | El cliente vuelve a iniciar sesión                                                                                                                                                                                       |
+| Un atacante puede bloquear una cuenta conocida (hasta 15 min si insiste)                          | Contrapartida del bloqueo por intentos                    | Bloqueo temporal; el admin puede restablecer la contraseña                                                                                                                                                               |
 | `npm audit`: `braces` (DoS por patrones anidados) llega vía `awilix` > `fast-glob` > `micromatch` | Aviso sin versión corregida (`braces` 3.0.3 es la última) | `awilix` solo usa glob en `loadModules`, que no se usa (todo se registra a mano); no ejecutar `npm audit fix --force`, que instalaría una versión vieja de `awilix`. Revisar de nuevo cuando salga una versión corregida |
 
 ## Pendiente para el despliegue (fase Docker)

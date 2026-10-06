@@ -150,6 +150,7 @@ export class PrismaCompanyRepository implements CompanyRepository {
         temporaryPasswordExpiresAt: password.expiresAt,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        lockLevel: 0,
         tokenVersion: { increment: 1 },
       },
       select: ADMIN_SELECT,

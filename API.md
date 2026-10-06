@@ -29,11 +29,11 @@ API de control de asistencia multiempresa. Este documento explica **cómo funcio
 
 **Roles.** Hay tres:
 
-| Rol | Qué hace |
-| --- | --- |
-| `platform_admin` (admin global) | Crea, edita y suspende empresas. No pertenece a ninguna. |
+| Rol                                | Qué hace                                                                                                   |
+| ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `platform_admin` (admin global)    | Crea, edita y suspende empresas. No pertenece a ninguna.                                                   |
 | `company_admin` (admin de empresa) | Uno por empresa. Gestiona empleados, ve y corrige la asistencia, cierra periodos. **No marca asistencia.** |
-| `employee` (empleado) | Marca entrada y salida, escribe su reporte diario y consulta su historial. |
+| `employee` (empleado)              | Marca entrada y salida, escribe su reporte diario y consulta su historial.                                 |
 
 **Marcajes (`time entries`).** Un marcaje es una jornada con entrada y salida. Un empleado puede tener **varios por día** (por ejemplo, salir a comer y volver a entrar), pero **solo uno abierto a la vez**. No hay "pausas": una pausa es una salida y una entrada.
 
@@ -76,7 +76,12 @@ curl -s -X POST http://localhost:3000/api/v1/auth/login \
       "lastName": "López",
       "role": "employee",
       "mustChangePassword": false,
-      "company": { "id": "0199...", "code": "K7QF-29MX", "name": "Taller Pérez", "timezone": "America/Denver" },
+      "company": {
+        "id": "0199...",
+        "code": "K7QF-29MX",
+        "name": "Taller Pérez",
+        "timezone": "America/Denver"
+      },
       "permissions": ["attendance.clock_own", "attendance.read_own"]
     }
   }
@@ -130,7 +135,7 @@ Respuesta de la salida (un marcaje, con las horas calculadas por el servidor):
 **Respuesta exitosa.**
 
 ```json
-{ "data": { }, "meta": { } }
+{ "data": {}, "meta": {} }
 ```
 
 `data` es el recurso (o una lista de recursos). `meta` solo aparece cuando hay datos adicionales, por ejemplo la paginación.
@@ -152,7 +157,11 @@ Respuesta de la salida (un marcaje, con las horas calculadas por el servidor):
 - **`details`** es opcional y su forma depende del error. En los errores de validación (`VALIDATION_ERROR`, HTTP 400) es una lista:
 
 ```json
-{ "location": "body", "path": "reason", "message": "Too small: expected string to have >=5 characters" }
+{
+  "location": "body",
+  "path": "reason",
+  "message": "Too small: expected string to have >=5 characters"
+}
 ```
 
 - **`requestId`** también viaja en el encabezado `X-Request-Id`. Inclúyelo al reportar un problema.
@@ -162,18 +171,18 @@ Respuesta de la salida (un marcaje, con las horas calculadas por el servidor):
 **Paginación.** Los listados aceptan `page` (desde 1) y `limit` (de 1 a 100, por defecto 20) y devuelven:
 
 ```json
-{ "data": [ ], "meta": { "page": 1, "limit": 20, "total": 57, "totalPages": 3 } }
+{ "data": [], "meta": { "page": 1, "limit": 20, "total": 57, "totalPages": 3 } }
 ```
 
 **Identificadores.** Todos los `id` son UUID (versión 7).
 
 **Fechas y horas.**
 
-| Tipo | Formato | Ejemplo | Dónde |
-| --- | --- | --- | --- |
-| Instante | ISO 8601 en **UTC** | `2026-10-07T14:00:00.000Z` | Todos los campos `...At` de las respuestas |
-| Hora local | ISO 8601 con desfase | `2026-10-07T08:00:00-06:00` | Campos `...Local` de las respuestas |
-| Día | `AAAA-MM-DD` | `2026-10-07` | `workDate`, `date`, `from`, `to` |
+| Tipo       | Formato              | Ejemplo                     | Dónde                                      |
+| ---------- | -------------------- | --------------------------- | ------------------------------------------ |
+| Instante   | ISO 8601 en **UTC**  | `2026-10-07T14:00:00.000Z`  | Todos los campos `...At` de las respuestas |
+| Hora local | ISO 8601 con desfase | `2026-10-07T08:00:00-06:00` | Campos `...Local` de las respuestas        |
+| Día        | `AAAA-MM-DD`         | `2026-10-07`                | `workDate`, `date`, `from`, `to`           |
 
 - Cuando **mandas** un instante (por ejemplo al crear un registro manual) puedes usar UTC o una hora local **con su desfase**. Una hora sin desfase se rechaza.
 - Las fechas deben estar entre los años 2000 y 2100.
@@ -183,14 +192,14 @@ Respuesta de la salida (un marcaje, con las horas calculadas por el servidor):
 
 **Límites de uso.** Si excedes un límite recibes `429` con `error.code = TOO_MANY_REQUESTS`. Los encabezados `RateLimit`, `RateLimit-Policy` y `Retry-After` indican cuánto esperar. Los límites son por IP:
 
-| Límite | Ventana | Peticiones | A qué aplica |
-| --- | --- | --- | --- |
-| Global | 1 minuto | 300 | Todo |
-| Inicio de sesión | 15 minutos | 10 por IP y email, 100 por IP | `POST /auth/login` |
-| Renovar sesión | 15 minutos | 120 | `POST /auth/refresh` |
-| Acciones sensibles | 15 minutos | 30 | cerrar sesión, cambiar contraseña, cerrar todas las sesiones, cerrar las sesiones de un empleado y cerrar un periodo |
-| Consultas pesadas | 1 minuto | 60 | resumen del día, actividad, hoja de tiempo de la empresa, estado del periodo y reportes pendientes de la empresa |
-| Exportaciones | 15 minutos | 20 | descarga de CSV |
+| Límite             | Ventana    | Peticiones                    | A qué aplica                                                                                                         |
+| ------------------ | ---------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| Global             | 1 minuto   | 300                           | Todo                                                                                                                 |
+| Inicio de sesión   | 15 minutos | 10 por IP y email, 100 por IP | `POST /auth/login`                                                                                                   |
+| Renovar sesión     | 15 minutos | 120                           | `POST /auth/refresh`                                                                                                 |
+| Acciones sensibles | 15 minutos | 30                            | cerrar sesión, cambiar contraseña, cerrar todas las sesiones, cerrar las sesiones de un empleado y cerrar un periodo |
+| Consultas pesadas  | 1 minuto   | 60                            | resumen del día, actividad, hoja de tiempo de la empresa, estado del periodo y reportes pendientes de la empresa     |
+| Exportaciones      | 15 minutos | 20                            | descarga de CSV                                                                                                      |
 
 **Seguridad HTTP.** Si llamas desde un navegador, el origen del front debe estar en la lista `CORS_ORIGINS` del servidor. Las llamadas de servidor a servidor no pasan por CORS.
 
@@ -210,10 +219,10 @@ Las rutas públicas son `GET /health`, `POST /auth/login`, `POST /auth/refresh` 
 
 ### Los dos tokens
 
-| Token | Duración | Para qué |
-| --- | --- | --- |
-| `accessToken` | 15 minutos | Se manda en cada petición |
-| `refreshToken` | 7 días | Se cambia por un par nuevo cuando el access vence |
+| Token          | Duración   | Para qué                                          |
+| -------------- | ---------- | ------------------------------------------------- |
+| `accessToken`  | 15 minutos | Se manda en cada petición                         |
+| `refreshToken` | 7 días     | Se cambia por un par nuevo cuando el access vence |
 
 Además, una sesión dura **como máximo 30 días desde el inicio de sesión**, aunque se renueve siempre. Pasado ese tiempo hay que iniciar sesión de nuevo (`SESSION_MAX_AGE_REACHED`).
 
@@ -248,7 +257,7 @@ Una contraseña nueva debe tener **al menos 12 caracteres** (máximo 128), ser d
 
 ### Bloqueo por intentos fallidos
 
-Cinco intentos fallidos de iniciar sesión bloquean la cuenta **15 minutos**. El login nunca revela si el email existe: ante un error responde siempre `401 INVALID_CREDENTIALS`.
+Tres intentos fallidos de iniciar sesión bloquean la cuenta **30 segundos**. El bloqueo es progresivo: cada reincidencia duplica la espera (1, 2, 4 minutos…) hasta un máximo de 15 minutos, y vuelve a 30 segundos si pasan 15 minutos sin reincidir o al iniciar sesión bien. El login nunca revela si el email existe: ante un error responde siempre `401 INVALID_CREDENTIALS`.
 
 ### Cliente de ejemplo (JavaScript)
 
@@ -263,7 +272,10 @@ class WorkTimeClient {
   }
 
   async login(email, password) {
-    const { data } = await this.#send('POST', '/auth/login', { body: { email, password }, auth: false });
+    const { data } = await this.#send('POST', '/auth/login', {
+      body: { email, password },
+      auth: false,
+    });
     this.session = data;
     return data.user;
   }
@@ -273,8 +285,12 @@ class WorkTimeClient {
       body: { refreshToken: this.session.refreshToken },
       auth: false,
     })
-      .then(({ data }) => { this.session = data; })
-      .finally(() => { this.refreshing = null; });
+      .then(({ data }) => {
+        this.session = data;
+      })
+      .finally(() => {
+        this.refreshing = null;
+      });
     return this.refreshing;
   }
 
@@ -297,7 +313,11 @@ class WorkTimeClient {
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (auth && this.session) headers.Authorization = `Bearer ${this.session.accessToken}`;
 
-    const response = await fetch(url, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
     if (response.status === 204) return { data: null };
     const json = await response.json();
     if (!response.ok) {
@@ -319,17 +339,17 @@ const { data: status } = await client.request('GET', '/me/clock-status');
 
 Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de permisos:
 
-| Permiso | Admin global | Admin de empresa | Empleado |
-| --- | :---: | :---: | :---: |
-| `companies.manage` | sí | | |
-| `company.settings.manage` | | sí | |
-| `employees.manage` | | sí | |
-| `attendance.read_all` | | sí | |
-| `time_entries.correct` | | sí | |
-| `attendance.clock_employees` | | sí | |
-| `periods.manage` | | sí | |
-| `attendance.clock_own` | | | sí |
-| `attendance.read_own` | | | sí |
+| Permiso                      | Admin global | Admin de empresa | Empleado |
+| ---------------------------- | :----------: | :--------------: | :------: |
+| `companies.manage`           |      sí      |                  |          |
+| `company.settings.manage`    |              |        sí        |          |
+| `employees.manage`           |              |        sí        |          |
+| `attendance.read_all`        |              |        sí        |          |
+| `time_entries.correct`       |              |        sí        |          |
+| `attendance.clock_employees` |              |        sí        |          |
+| `periods.manage`             |              |        sí        |          |
+| `attendance.clock_own`       |              |                  |    sí    |
+| `attendance.read_own`        |              |                  |    sí    |
 
 `GET /auth/me` devuelve la lista de `permissions` del usuario: sirve para decidir qué pantallas y botones mostrar. Un usuario que intenta usar un endpoint sin el permiso recibe `403 FORBIDDEN`.
 
@@ -365,12 +385,12 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 ### Correcciones, registros manuales y anulaciones (admin)
 
-| Acción | Endpoint | Reglas |
-| --- | --- | --- |
-| Corregir la entrada o salida | `PATCH /company/time-entries/{id}` | Motivo obligatorio (5 a 500). Queda el valor anterior y el empleado ve que fue corregido. |
-| Crear una jornada que nadie marcó | `POST /company/employees/{id}/time-entries` | Solo de los **últimos 14 días**, sin horas futuras y **sin cruzarse** con otro registro. Motivo obligatorio. |
-| Anular un registro equivocado | `POST /company/time-entries/{id}/void` | Motivo obligatorio. **No se borra**: deja de contar en todo y queda con quién, cuándo y por qué. **No se deshace.** |
-| Marcar entrada o salida por un empleado | `POST /company/employees/{id}/clock-in` y `/clock-out` | La hora la pone el servidor. Queda auditado. |
+| Acción                                  | Endpoint                                               | Reglas                                                                                                              |
+| --------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| Corregir la entrada o salida            | `PATCH /company/time-entries/{id}`                     | Motivo obligatorio (5 a 500). Queda el valor anterior y el empleado ve que fue corregido.                           |
+| Crear una jornada que nadie marcó       | `POST /company/employees/{id}/time-entries`            | Solo de los **últimos 14 días**, sin horas futuras y **sin cruzarse** con otro registro. Motivo obligatorio.        |
+| Anular un registro equivocado           | `POST /company/time-entries/{id}/void`                 | Motivo obligatorio. **No se borra**: deja de contar en todo y queda con quién, cuándo y por qué. **No se deshace.** |
+| Marcar entrada o salida por un empleado | `POST /company/employees/{id}/clock-in` y `/clock-out` | La hora la pone el servidor. Queda auditado.                                                                        |
 
 Un registro **anulado** no cuenta para horas, límites, hojas de tiempo ni reportes, y **el empleado no lo ve**. El admin lo ve con `?status=voided`.
 
@@ -392,7 +412,8 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 ### Empleados
 
 - Una empresa no puede tener más empleados **activos** que su límite contratado (`409 EMPLOYEE_LIMIT_REACHED`).
-- **Desactivar** a un empleado cierra su sesión y su entrada abierta. Un empleado desactivado puede volver a activarse.
+- **Desactivar** a un empleado cierra su sesión y su entrada abierta. Un empleado desactivado puede volver a activarse y deja de contar para el tope de empleados.
+- **Eliminar** (`DELETE /company/employees/{id}`) solo es posible si el empleado **nunca registró horas ni reportes** (por ejemplo un alta por error): borra su cuenta y su historial de accesos y libera su correo; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY` y lo correcto es desactivarlo. Queda un evento `employee.deleted` en la auditoría.
 - El email del empleado es su identidad de acceso y **no se edita**.
 - El teléfono es opcional y solo informativo.
 
@@ -404,15 +425,15 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 
 Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 
-| Campo | Para qué |
-| --- | --- |
-| `clockedIn` | Si está trabajando |
-| `openEntry` | La entrada abierta (o `null`) |
-| `serverTime` y `elapsedSeconds` | Para el contador en vivo |
-| `canClockIn` | Si el botón de entrada debe estar activo |
-| `pendingReports` | Fechas de reportes que debe escribir |
-| `dailyLimit` | Límite diario y cuánto le queda (o `null`) |
-| `dailyReport` | Si es obligatorio y el texto ya escrito hoy |
+| Campo                           | Para qué                                    |
+| ------------------------------- | ------------------------------------------- |
+| `clockedIn`                     | Si está trabajando                          |
+| `openEntry`                     | La entrada abierta (o `null`)               |
+| `serverTime` y `elapsedSeconds` | Para el contador en vivo                    |
+| `canClockIn`                    | Si el botón de entrada debe estar activo    |
+| `pendingReports`                | Fechas de reportes que debe escribir        |
+| `dailyLimit`                    | Límite diario y cuánto le queda (o `null`)  |
+| `dailyReport`                   | Si es obligatorio y el texto ya escrito hoy |
 
 **El contador en vivo lo dibuja el cliente.** Toma `elapsedSeconds` y `serverTime` en el momento de la respuesta y avanza con su propio reloj; no consultes cada segundo. Si hay límite diario, la cuenta regresiva parte de `dailyLimit.remainingSeconds`. Cuando llegue a cero, vuelve a pedir el estado: el servidor ya cerró la entrada.
 
@@ -430,7 +451,7 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 
 ### Escribir un reporte pendiente
 
-`PUT /me/daily-reports/{fecha}` con `{ "content": "..." }`. Funciona para días con marcajes de los últimos 14 días. `GET /me/daily-reports/pending` da la lista completa.
+`PUT /me/daily-reports/{fecha}` con `{ "content": "..." }`. El contenido es **Markdown** (negritas, cursiva, listas, enlaces y citas; un texto sin formato también sirve) y los límites de 10 a 2000 caracteres cuentan el texto tal como se guarda, con sus marcas. Para mostrarlo, usa un visor de Markdown que **no interprete HTML en bruto** y que filtre los enlaces peligrosos. Funciona para días con marcajes de los últimos 14 días. `GET /me/daily-reports/pending` da la lista completa.
 
 ### Historial y periodo
 
@@ -440,7 +461,7 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 
 ### Cuenta
 
-`GET /auth/me`, `PATCH /auth/me` (nombre y apellido), `PATCH /auth/me/password` y `POST /auth/me/logout-all`.
+`GET /auth/me`, `PATCH /auth/me` (nombre y apellido), `PATCH /auth/me/password` y `POST /auth/me/logout-all`. El perfil (`CurrentUser`, también en el login) incluye `employee: { employeeCode, timezone }` para el rol `employee` (la zona es la efectiva) y `null` para los admins.
 
 ---
 
@@ -462,6 +483,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 - `GET /company/employees` y `GET /company/employees/{id}` — listado (con `search` por nombre, email o código, y `status`) y detalle.
 - `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria y límite diario propio.
 - `PATCH /company/employees/{id}/status` — activar o desactivar.
+- `DELETE /company/employees/{id}` — eliminar a un empleado sin historial (ver arriba).
 - `POST /company/employees/{id}/reset-password` — nueva contraseña temporal.
 - `POST /company/employees/{id}/revoke-sessions` — cierra todas sus sesiones.
 
@@ -487,6 +509,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 ### Reportes y actividad
 
 - `GET /company/daily-reports` — reportes escritos (filtros por empleado y días) y `GET /company/daily-reports/{id}/revisions` para ver las versiones anteriores.
+- `GET /company/daily-reports/export` — los mismos reportes, con los mismos filtros (`employeeId`, `from`, `to`) y sin paginar, como **CSV** (UTF-8 con BOM; columnas: código, empleado, fecha, reporte como texto plano sin las marcas de formato, creado y última edición en UTC). Los textos que empiezan con `= + - @` llevan un apóstrofo delante para evitar fórmulas en Excel. Más de 5000 reportes responde `400 EXPORT_TOO_LARGE`: acota el rango. Se descarga con el token en el encabezado.
 - `GET /company/activity` — todo lo que el admin hizo sobre la asistencia (marcar por otros, registros manuales, correcciones, anulaciones y cierres), con filtros.
 
 ### Ajustes de la empresa
@@ -511,26 +534,26 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 Decide por `error.code`, no por el texto. Los casos más importantes:
 
-| Código | HTTP | Qué hacer |
-| --- | --- | --- |
-| `TOKEN_EXPIRED` | 401 | Renovar con `POST /auth/refresh` y repetir la petición. |
-| `MISSING_TOKEN`, `INVALID_TOKEN` | 401 | Iniciar sesión de nuevo. |
-| `SESSION_REVOKED` | 401 | La sesión se cerró (contraseña cambiada, desactivación o cierre de sesiones): iniciar sesión de nuevo. |
-| `INVALID_REFRESH_TOKEN`, `REFRESH_TOKEN_EXPIRED`, `SESSION_MAX_AGE_REACHED` | 401 | Iniciar sesión de nuevo. No reintentes el refresh. |
-| `INVALID_CREDENTIALS` | 401 | Email o contraseña incorrectos (o cuenta bloqueada 15 minutos). |
-| `PASSWORD_CHANGE_REQUIRED` | 403 | Llevar al usuario a cambiar su contraseña temporal. |
-| `USER_INACTIVE`, `COMPANY_SUSPENDED` | 403 | Mostrar que no tiene acceso; no insistir. |
-| `TEMPORARY_PASSWORD_EXPIRED` | 403 | Pedir al admin una contraseña temporal nueva. |
-| `FORBIDDEN` | 403 | El usuario no tiene el permiso. Revisa los `permissions` de `/auth/me`. |
-| `VALIDATION_ERROR` | 400 | Mostrar los mensajes de `error.details` junto a cada campo (`path`). |
-| `DAILY_REPORT_PENDING` | 409 | Mostrar `error.details.dates` y dejar escribir los reportes. |
-| `DAILY_REPORT_REQUIRED` | 400 | Pedir el reporte antes de marcar la salida. |
-| `DAILY_LIMIT_REACHED` | 409 | Avisar que ya alcanzó su límite de hoy. |
-| `PERIOD_CLOSED` | 409 | El periodo está cerrado; ya no admite cambios. |
-| `PERIOD_HAS_OPEN_ENTRIES` | 409 | Mostrar `error.details.entries` y pedir corregirlas o anularlas. |
-| `TIME_ENTRY_OVERLAP` | 409 | El horario se cruza con otro registro del empleado. |
-| `TIME_ENTRY_CHANGED` | 409 | Alguien cambió el registro mientras lo editabas: recárgalo. |
-| `TOO_MANY_REQUESTS` | 429 | Esperar lo que indique `Retry-After`. |
+| Código                                                                      | HTTP | Qué hacer                                                                                              |
+| --------------------------------------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------ |
+| `TOKEN_EXPIRED`                                                             | 401  | Renovar con `POST /auth/refresh` y repetir la petición.                                                |
+| `MISSING_TOKEN`, `INVALID_TOKEN`                                            | 401  | Iniciar sesión de nuevo.                                                                               |
+| `SESSION_REVOKED`                                                           | 401  | La sesión se cerró (contraseña cambiada, desactivación o cierre de sesiones): iniciar sesión de nuevo. |
+| `INVALID_REFRESH_TOKEN`, `REFRESH_TOKEN_EXPIRED`, `SESSION_MAX_AGE_REACHED` | 401  | Iniciar sesión de nuevo. No reintentes el refresh.                                                     |
+| `INVALID_CREDENTIALS`                                                       | 401  | Email o contraseña incorrectos (o cuenta bloqueada temporalmente).                                     |
+| `PASSWORD_CHANGE_REQUIRED`                                                  | 403  | Llevar al usuario a cambiar su contraseña temporal.                                                    |
+| `USER_INACTIVE`, `COMPANY_SUSPENDED`                                        | 403  | Mostrar que no tiene acceso; no insistir.                                                              |
+| `TEMPORARY_PASSWORD_EXPIRED`                                                | 403  | Pedir al admin una contraseña temporal nueva.                                                          |
+| `FORBIDDEN`                                                                 | 403  | El usuario no tiene el permiso. Revisa los `permissions` de `/auth/me`.                                |
+| `VALIDATION_ERROR`                                                          | 400  | Mostrar los mensajes de `error.details` junto a cada campo (`path`).                                   |
+| `DAILY_REPORT_PENDING`                                                      | 409  | Mostrar `error.details.dates` y dejar escribir los reportes.                                           |
+| `DAILY_REPORT_REQUIRED`                                                     | 400  | Pedir el reporte antes de marcar la salida.                                                            |
+| `DAILY_LIMIT_REACHED`                                                       | 409  | Avisar que ya alcanzó su límite de hoy.                                                                |
+| `PERIOD_CLOSED`                                                             | 409  | El periodo está cerrado; ya no admite cambios.                                                         |
+| `PERIOD_HAS_OPEN_ENTRIES`                                                   | 409  | Mostrar `error.details.entries` y pedir corregirlas o anularlas.                                       |
+| `TIME_ENTRY_OVERLAP`                                                        | 409  | El horario se cruza con otro registro del empleado.                                                    |
+| `TIME_ENTRY_CHANGED`                                                        | 409  | Alguien cambió el registro mientras lo editabas: recárgalo.                                            |
+| `TOO_MANY_REQUESTS`                                                         | 429  | Esperar lo que indique `Retry-After`.                                                                  |
 
 El **catálogo completo de códigos**, con en qué endpoints puede aparecer cada uno, está al final de la referencia.
 
@@ -548,14 +571,14 @@ Cualquier sistema puede usarla: es una API HTTP normal con JSON. Algunas recomen
 
 **Qué leer.** Las consultas más útiles para un sistema externo:
 
-| Necesidad | Endpoint |
-| --- | --- |
+| Necesidad                                  | Endpoint                                                |
+| ------------------------------------------ | ------------------------------------------------------- |
 | Horas por empleado y por día de un periodo | `GET /company/timesheet?date=` (JSON) o `/export` (CSV) |
-| Todos los marcajes de un rango | `GET /company/time-entries?from=&to=` (paginado) |
-| Horas de un empleado | `GET /company/employees/{id}/timesheet` |
-| Lista de empleados y sus códigos | `GET /company/employees` |
-| Quién está trabajando ahora | `GET /company/attendance/live` |
-| Saber si un periodo ya es definitivo | `GET /company/periods?date=` (`closure`) |
+| Todos los marcajes de un rango             | `GET /company/time-entries?from=&to=` (paginado)        |
+| Horas de un empleado                       | `GET /company/employees/{id}/timesheet`                 |
+| Lista de empleados y sus códigos           | `GET /company/employees`                                |
+| Quién está trabajando ahora                | `GET /company/attendance/live`                          |
+| Saber si un periodo ya es definitivo       | `GET /company/periods?date=` (`closure`)                |
 
 **Buenas prácticas.**
 
@@ -571,7 +594,7 @@ Cualquier sistema puede usarla: es una API HTTP normal con JSON. Algunas recomen
 
 ## 12. Referencia de endpoints
 
-Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelve y qué errores específicos puede dar. Los tipos con enlace (por ejemplo [MyTimeEntry](#schema-mytimeentry)) se describen al final, en *Objetos que devuelve la API*. Los campos "o null" pueden venir vacíos. Todas las rutas empiezan con `/api/v1`.
+Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelve y qué errores específicos puede dar. Los tipos con enlace (por ejemplo [MyTimeEntry](#schema-mytimeentry)) se describen al final, en _Objetos que devuelve la API_. Los campos "o null" pueden venir vacíos. Todas las rutas empiezan con `/api/v1`.
 
 ### Índice de endpoints
 
@@ -609,6 +632,7 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`POST /company/employees`](#op-post-company-employees) — Dar de alta un empleado
 - [`GET /company/employees/{id}`](#op-get-company-employees-id) — Detalle de un empleado
 - [`PATCH /company/employees/{id}`](#op-patch-company-employees-id) — Editar un empleado
+- [`DELETE /company/employees/{id}`](#op-delete-company-employees-id) — Eliminar un empleado
 - [`PATCH /company/employees/{id}/status`](#op-patch-company-employees-id-status) — Activar o desactivar un empleado
 - [`POST /company/employees/{id}/revoke-sessions`](#op-post-company-employees-id-revoke-sessions) — Cerrar las sesiones de un empleado
 - [`POST /company/employees/{id}/reset-password`](#op-post-company-employees-id-reset-password) — Restablecer la contraseña de un empleado
@@ -630,6 +654,7 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`POST /company/employees/{id}/clock-out`](#op-post-company-employees-id-clock-out) — Marcar salida a un empleado
 - [`GET /company/daily-reports/pending`](#op-get-company-daily-reports-pending) — Quién debe reportes del día
 - [`GET /company/daily-reports`](#op-get-company-daily-reports) — Reportes del día de los empleados
+- [`GET /company/daily-reports/export`](#op-get-company-daily-reports-export) — Exportar los reportes del día a CSV
 - [`GET /company/daily-reports/{id}/revisions`](#op-get-company-daily-reports-id-revisions) — Versiones anteriores de un reporte
 - [`GET /company/activity`](#op-get-company-activity) — Actividad del admin sobre la asistencia
 - [`GET /company/attendance/summary`](#op-get-company-attendance-summary) — Resumen del día
@@ -1151,7 +1176,7 @@ Crea el empleado con su usuario y una contraseña temporal (se muestra una sola 
 | `firstName` | texto | sí | (1 a 100 caracteres; ej. `"Ana"`) |
 | `lastName` | texto | sí | (1 a 100 caracteres; ej. `"López"`) |
 | `phone` | texto o null | no | Teléfono de contacto opcional (solo informativo). `null` o vacío = sin teléfono. (0 a 30 caracteres; ej. `"+52 33 1234 5678"`) |
-| `hiredAt` | fecha AAAA-MM-DD o null | no | (ej. `"2026-06-01"`) |
+| `hiredAt` | fecha AAAA-MM-DD o null | no | Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado. (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
 
 **Respuesta 201:** Empleado creado
@@ -1231,6 +1256,33 @@ Solo se modifican los campos enviados. `timezone: null` hace que herede la de la
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
+
+<a id="op-delete-company-employees-id"></a>
+#### `DELETE /company/employees/{id}`
+
+**Eliminar un empleado**
+
+**Acceso:** permiso `employees.manage` (admin de empresa).
+
+Solo funciona con un empleado que nunca registró horas ni reportes (por ejemplo un alta por error). Borra su cuenta y su historial de accesos, libera su correo y su lugar en el tope de empleados; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY`: desactívalo en su lugar.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Respuesta 204:** Empleado eliminado
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
+| 409 | `EMPLOYEE_HAS_HISTORY` | El empleado ya tiene historial |
 
 <a id="op-patch-company-employees-id-status"></a>
 #### `PATCH /company/employees/{id}/status`
@@ -1379,7 +1431,7 @@ Si la empresa exige el reporte diario, hay que mandar `dailyReport` con lo que h
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
-| `dailyReport` | texto | no | Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior. (0 a 2000 caracteres) |
+| `dailyReport` | texto | no | Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior. Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve. (0 a 2000 caracteres) |
 
 **Respuesta 200:** Salida registrada
 
@@ -1414,7 +1466,7 @@ Un reporte por día laboral. Se puede editar el mismo día (la versión anterior
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
-| `content` | texto | sí | (0 a 2000 caracteres) |
+| `content` | texto | sí | Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve. Los límites de 10 a 2000 caracteres cuentan el texto tal como se guarda, con sus marcas. (0 a 2000 caracteres) |
 
 **Respuesta 200:** Reporte guardado
 
@@ -1702,6 +1754,36 @@ Filtra por empleado y día laboral (`from`/`to`, inclusive).
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
 | 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | Empleado inexistente |
+
+<a id="op-get-company-daily-reports-export"></a>
+#### `GET /company/daily-reports/export`
+
+**Exportar los reportes del día a CSV**
+
+**Acceso:** permiso `attendance.read_all` (admin de empresa).
+
+Los mismos reportes de `/company/daily-reports` (filtra por empleado y día laboral con `from`/`to`), sin paginar, como archivo CSV (UTF-8). Con más de 5000 reportes hay que acotar el rango.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `employeeId` | texto (uuid) | no | — |
+
+**Respuesta 200:** Archivo CSV
+
+Devuelve un archivo CSV (`text/csv`), no JSON.
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `EXPORT_TOO_LARGE` · `VALIDATION_ERROR` | Rango inválido o demasiados reportes |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_NOT_FOUND` | Empleado inexistente |
@@ -2234,7 +2316,7 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `ALREADY_CLOCKED_IN` | 409 | `POST /me/clock-in` |
 | `COMPANY_ADMIN_NOT_FOUND` | 404 | `POST /platform/companies/{id}/admin/reset-password` |
 | `COMPANY_NOT_FOUND` | 404 | 4 endpoints |
-| `COMPANY_SUSPENDED` | 403 | 49 endpoints |
+| `COMPANY_SUSPENDED` | 403 | 51 endpoints |
 | `DAILY_LIMIT_REACHED` | 409 | `POST /me/clock-in`, `POST /company/employees/{id}/clock-in` |
 | `DAILY_REPORT_LOCKED` | 409 | `PUT /me/daily-reports/{date}` |
 | `DAILY_REPORT_NOT_FOUND` | 404 | `GET /company/daily-reports/{id}/revisions` |
@@ -2242,18 +2324,20 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `DAILY_REPORT_REQUIRED` | 400 | `POST /me/clock-out` |
 | `EMAIL_TAKEN` | 409 | `POST /platform/companies`, `POST /company/employees` |
 | `EMPLOYEE_ALREADY_CLOCKED_IN` | 409 | `POST /company/employees/{id}/clock-in` |
+| `EMPLOYEE_HAS_HISTORY` | 409 | `DELETE /company/employees/{id}` |
 | `EMPLOYEE_INACTIVE` | 409 | `POST /company/employees/{id}/clock-in` |
 | `EMPLOYEE_LIMIT_REACHED` | 409 | `POST /company/employees`, `PATCH /company/employees/{id}/status` |
 | `EMPLOYEE_NOT_CLOCKED_IN` | 409 | `POST /company/employees/{id}/clock-out` |
-| `EMPLOYEE_NOT_FOUND` | 404 | 13 endpoints |
+| `EMPLOYEE_NOT_FOUND` | 404 | 15 endpoints |
 | `EMPLOYEE_PROFILE_NOT_FOUND` | 404 | 8 endpoints |
 | `ERROR` | 503 | `GET /health` |
-| `FORBIDDEN` | 403 | 43 endpoints |
+| `EXPORT_TOO_LARGE` | 400 | `GET /company/daily-reports/export` |
+| `FORBIDDEN` | 403 | 45 endpoints |
 | `INVALID_COMPANY_NAME` | 400 | `POST /platform/companies`, `PATCH /platform/companies/{id}`, `PATCH /company` |
 | `INVALID_CREDENTIALS` | 401 | `POST /auth/login` |
 | `INVALID_CURRENT_PASSWORD` | 400 | `PATCH /auth/me/password` |
 | `INVALID_DAILY_REPORT` | 400 | `POST /me/clock-out`, `PUT /me/daily-reports/{date}` |
-| `INVALID_DATE_RANGE` | 400 | 5 endpoints |
+| `INVALID_DATE_RANGE` | 400 | 6 endpoints |
 | `INVALID_JSON` | 400 | 19 endpoints |
 | `INVALID_MAX_EMPLOYEES` | 400 | `POST /platform/companies`, `PATCH /platform/companies/{id}` |
 | `INVALID_PHONE` | 400 | `POST /company/employees`, `PATCH /company/employees/{id}` |
@@ -2262,14 +2346,14 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `INVALID_REPORT_DATE` | 400 | `PUT /me/daily-reports/{date}` |
 | `INVALID_TIME_RANGE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `INVALID_TIMEZONE` | 400 | 5 endpoints |
-| `INVALID_TOKEN` | 401 | 47 endpoints |
+| `INVALID_TOKEN` | 401 | 49 endpoints |
 | `MANUAL_ENTRY_TOO_OLD` | 400 | `POST /company/employees/{id}/time-entries` |
 | `MAX_EMPLOYEES_BELOW_ACTIVE` | 409 | `PATCH /platform/companies/{id}` |
-| `MISSING_TOKEN` | 401 | 47 endpoints |
+| `MISSING_TOKEN` | 401 | 49 endpoints |
 | `NO_CHANGES` | 400 | `PATCH /company/time-entries/{id}` |
 | `NO_WORK_ON_DATE` | 400 | `PUT /me/daily-reports/{date}` |
 | `NOT_CLOCKED_IN` | 409 | `POST /me/clock-out` |
-| `PASSWORD_CHANGE_REQUIRED` | 403 | 44 endpoints |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | 46 endpoints |
 | `PASSWORD_REUSED` | 400 | `PATCH /auth/me/password` |
 | `PERIOD_ALREADY_CLOSED` | 409 | `POST /company/periods/close` |
 | `PERIOD_CLOSED` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
@@ -2278,16 +2362,16 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `REFRESH_TOKEN_EXPIRED` | 401 | `POST /auth/refresh` |
 | `REPORT_DATE_TOO_OLD` | 400 | `PUT /me/daily-reports/{date}` |
 | `SESSION_MAX_AGE_REACHED` | 401 | `POST /auth/refresh` |
-| `SESSION_REVOKED` | 401 | 47 endpoints |
+| `SESSION_REVOKED` | 401 | 49 endpoints |
 | `TEMPORARY_PASSWORD_EXPIRED` | 403 | `POST /auth/login` |
 | `TIME_ENTRY_CHANGED` | 409 | `PATCH /company/time-entries/{id}` |
 | `TIME_ENTRY_NOT_FOUND` | 404 | 4 endpoints |
 | `TIME_ENTRY_OVERLAP` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `TIME_ENTRY_VOIDED` | 409 | `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
 | `TIME_IN_FUTURE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
-| `TOKEN_EXPIRED` | 401 | 47 endpoints |
-| `USER_INACTIVE` | 403 | 49 endpoints |
-| `VALIDATION_ERROR` | 400 | 42 endpoints |
+| `TOKEN_EXPIRED` | 401 | 49 endpoints |
+| `USER_INACTIVE` | 403 | 51 endpoints |
+| `VALIDATION_ERROR` | 400 | 44 endpoints |
 | `WEAK_PASSWORD` | 400 | `PATCH /auth/me/password` |
 
 Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `TOO_MANY_REQUESTS` (429) e `INTERNAL_ERROR` (500).
@@ -2408,7 +2492,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
-| `dailyReport` | texto | no | Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior. (0 a 2000 caracteres) |
+| `dailyReport` | texto | no | Reporte de lo que hiciste hoy (10 a 2000 caracteres). Si la empresa lo exige es obligatorio y se manda completo en cada salida, con el texto ya escrito ese día si lo hay. Reemplaza el reporte del día y se conserva la versión anterior. Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve. (0 a 2000 caracteres) |
 
 <a id="schema-clockstatus"></a>
 #### ClockStatus
@@ -2430,7 +2514,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `dailyReport` | objeto | sí | Reporte del día de la entrada abierta, o de hoy si no hay |
 | `dailyReport.required` | booleano | sí | true: la empresa exige el reporte al marcar salida |
 | `dailyReport.workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
-| `dailyReport.content` | texto o null | sí | Reporte ya escrito ese día, para mostrarlo cargado al marcar salida |
+| `dailyReport.content` | texto o null | sí | Reporte ya escrito ese día, para mostrarlo cargado al marcar salida. Es Markdown. |
 
 <a id="schema-closeperiodrequest"></a>
 #### ClosePeriodRequest
@@ -2539,7 +2623,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `firstName` | texto | sí | (1 a 100 caracteres; ej. `"Ana"`) |
 | `lastName` | texto | sí | (1 a 100 caracteres; ej. `"López"`) |
 | `phone` | texto o null | no | Teléfono de contacto opcional (solo informativo). `null` o vacío = sin teléfono. (0 a 30 caracteres; ej. `"+52 33 1234 5678"`) |
-| `hiredAt` | fecha AAAA-MM-DD o null | no | (ej. `"2026-06-01"`) |
+| `hiredAt` | fecha AAAA-MM-DD o null | no | Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado. (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
 
 <a id="schema-createmanualtimeentryrequest"></a>
@@ -2567,6 +2651,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `company.code` | texto | sí | — |
 | `company.name` | texto | sí | — |
 | `company.timezone` | texto | sí | — |
+| `employee` | objeto o null | sí | — |
 | `permissions` | (`companies.manage` \| `company.settings.manage` \| `employees.manage` \| `attendance.read_all` \| `time_entries.correct` \| `attendance.clock_employees` \| `periods.manage` \| `attendance.clock_own` \| `attendance.read_own`)[] | sí | — |
 
 <a id="schema-dailyreport"></a>
@@ -2576,7 +2661,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
 | `workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
-| `content` | texto | sí | — |
+| `content` | texto | sí | Texto del reporte en Markdown |
 | `revisions` | entero | sí | Versiones anteriores conservadas |
 | `createdAt` | fecha y hora ISO 8601 | sí | — |
 | `updatedAt` | fecha y hora ISO 8601 | sí | — |
@@ -2673,7 +2758,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
 | `workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
-| `content` | texto | sí | — |
+| `content` | texto | sí | Texto del reporte en Markdown |
 | `revisions` | entero | sí | Versiones anteriores conservadas |
 | `createdAt` | fecha y hora ISO 8601 | sí | — |
 | `updatedAt` | fecha y hora ISO 8601 | sí | — |
@@ -2781,7 +2866,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
-| `content` | texto | sí | (0 a 2000 caracteres) |
+| `content` | texto | sí | Texto en Markdown (negritas, cursiva, listas, enlaces y citas); un texto sin formato también sirve. Los límites de 10 a 2000 caracteres cuentan el texto tal como se guarda, con sus marcas. (0 a 2000 caracteres) |
 
 <a id="schema-session"></a>
 #### Session

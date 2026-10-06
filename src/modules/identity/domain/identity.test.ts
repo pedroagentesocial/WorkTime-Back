@@ -19,6 +19,7 @@ const base: UserAccountProps = {
   temporaryPasswordExpiresAt: null,
   tokenVersion: 0,
   lockedUntil: null,
+  lockLevel: 0,
   company: { id: 'c1', code: 'K7QF-29MX', name: 'Empresa', timezone: 'UTC', status: 'active' },
 };
 
@@ -57,15 +58,39 @@ describe('UserAccount', () => {
 });
 
 describe('LoginLockoutPolicy', () => {
-  const policy = new LoginLockoutPolicy(5, 15 * 60_000);
+  const policy = new LoginLockoutPolicy(3, 30_000, 15 * 60_000, 15 * 60_000);
+  const seconds = (n: number) => new Date(now.getTime() + n * 1000);
 
   it('bloquea al llegar al máximo de intentos', () => {
-    expect(policy.shouldLock(4)).toBe(false);
-    expect(policy.shouldLock(5)).toBe(true);
+    expect(policy.shouldLock(2)).toBe(false);
+    expect(policy.shouldLock(3)).toBe(true);
   });
 
-  it('calcula el fin del bloqueo', () => {
-    expect(policy.lockedUntil(now)).toEqual(minutes(15));
+  it('el primer bloqueo dura 30 segundos', () => {
+    expect(policy.nextLock({ lockedUntil: null, lockLevel: 0 }, now)).toEqual({
+      until: seconds(30),
+      level: 1,
+    });
+  });
+
+  it('cada reincidencia duplica la espera', () => {
+    const second = policy.nextLock({ lockedUntil: seconds(-1), lockLevel: 1 }, now);
+    expect(second).toEqual({ until: seconds(60), level: 2 });
+    const third = policy.nextLock({ lockedUntil: seconds(-1), lockLevel: 2 }, now);
+    expect(third).toEqual({ until: seconds(120), level: 3 });
+  });
+
+  it('la espera tiene tope', () => {
+    const capped = policy.nextLock({ lockedUntil: seconds(-1), lockLevel: 40 }, now);
+    expect(capped.until).toEqual(minutes(15));
+  });
+
+  it('sin reincidir durante la ventana vuelve al primer nivel', () => {
+    const old = new Date(now.getTime() - 16 * 60_000);
+    expect(policy.nextLock({ lockedUntil: old, lockLevel: 5 }, now)).toEqual({
+      until: seconds(30),
+      level: 1,
+    });
   });
 });
 

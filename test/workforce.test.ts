@@ -406,3 +406,31 @@ describe('POST /company/employees/:id/reset-password', () => {
     await login(app, employee.email, second);
   });
 });
+
+describe('fecha de ingreso automática', () => {
+  it('sin hiredAt se registra el día del alta en la zona horaria del empleado', async () => {
+    const { app, clock } = createTestApp();
+    clock.advance(new Date('2026-10-08T03:00:00Z').getTime() - clock.now().getTime());
+    const { auth } = await companyAdminSession(app);
+
+    const inherited = await createEmployeeVia(app, auth);
+    const madrid = await createEmployeeVia(app, auth, newEmployee({ timezone: 'Europe/Madrid' }));
+
+    const get = async (id: string) =>
+      (
+        await request(app)
+          .get(api(`/company/employees/${id}`))
+          .set(auth)
+          .expect(200)
+      ).body.data;
+    expect((await get(inherited.employee.id)).hiredAt).toBe('2026-10-07');
+    expect((await get(madrid.employee.id)).hiredAt).toBe('2026-10-08');
+  });
+
+  it('una fecha explícita sigue mandando', async () => {
+    const { app } = createTestApp();
+    const { auth } = await companyAdminSession(app);
+    const created = await createEmployeeVia(app, auth, newEmployee({ hiredAt: '2024-02-29' }));
+    expect(created.employee).toMatchObject({ hiredAt: '2024-02-29' });
+  });
+});

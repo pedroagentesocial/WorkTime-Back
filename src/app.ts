@@ -18,7 +18,7 @@ export function createApp(container: AppContainer, modules: readonly AppModule[]
 
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', false);
+  app.set('trust proxy', env.trustProxyHops > 0 ? env.trustProxyHops : false);
 
   app.use(createRequestLogger(logger, [`${API_PREFIX}/health`]));
   app.use(

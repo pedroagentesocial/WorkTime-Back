@@ -1,3 +1,4 @@
+import { resolveTimezone } from '#shared/domain/timezone.js';
 import type { PrismaDb } from '#shared/infrastructure/prisma/prisma-db.js';
 import type { Prisma } from '#generated/prisma/client.js';
 import type { UserAccountRepository } from '../application/ports/user-account.repository.js';
@@ -19,7 +20,9 @@ const ACCOUNT_SELECT = {
   temporaryPasswordExpiresAt: true,
   tokenVersion: true,
   lockedUntil: true,
+  lockLevel: true,
   company: { select: { id: true, code: true, name: true, timezone: true, status: true } },
+  employee: { select: { employeeCode: true, timezone: true } },
 } satisfies Prisma.UserSelect;
 
 type AccountRow = Prisma.UserGetPayload<{ select: typeof ACCOUNT_SELECT }>;
@@ -54,17 +57,17 @@ export class PrismaUserAccountRepository implements UserAccountRepository {
     await this.db.client.user.update({ where: { id: userId }, data: { failedLoginAttempts: 0 } });
   }
 
-  async lock(userId: string, until: Date): Promise<void> {
+  async lock(userId: string, until: Date, level: number): Promise<void> {
     await this.db.client.user.update({
       where: { id: userId },
-      data: { lockedUntil: until, failedLoginAttempts: 0 },
+      data: { lockedUntil: until, lockLevel: level, failedLoginAttempts: 0 },
     });
   }
 
   async recordSuccessfulLogin(userId: string, at: Date): Promise<void> {
     await this.db.client.user.update({
       where: { id: userId },
-      data: { failedLoginAttempts: 0, lockedUntil: null, lastLoginAt: at },
+      data: { failedLoginAttempts: 0, lockedUntil: null, lockLevel: 0, lastLoginAt: at },
     });
   }
 
@@ -93,6 +96,7 @@ export class PrismaUserAccountRepository implements UserAccountRepository {
         temporaryPasswordExpiresAt: null,
         failedLoginAttempts: 0,
         lockedUntil: null,
+        lockLevel: 0,
         tokenVersion: { increment: 1 },
       },
     });
@@ -112,6 +116,14 @@ function toDomain(row: AccountRow): UserAccount {
     temporaryPasswordExpiresAt: row.temporaryPasswordExpiresAt,
     tokenVersion: row.tokenVersion,
     lockedUntil: row.lockedUntil,
+    lockLevel: row.lockLevel,
     company: row.company,
+    employee:
+      row.employee && row.company
+        ? {
+            employeeCode: row.employee.employeeCode,
+            timezone: resolveTimezone(row.employee.timezone, row.company.timezone),
+          }
+        : null,
   });
 }

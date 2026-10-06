@@ -44,7 +44,9 @@ export const identityModule: AppModule = {
       loginLockoutPolicy: asValue(
         new LoginLockoutPolicy(
           SECURITY.login.maxFailedAttempts,
-          SECURITY.login.lockoutMinutes * 60_000,
+          SECURITY.login.lockoutBaseSeconds * 1000,
+          SECURITY.login.lockoutMaxMinutes * 60_000,
+          SECURITY.login.lockoutResetMinutes * 60_000,
         ),
       ),
       passwordPolicy: asValue(

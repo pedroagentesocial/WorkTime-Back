@@ -90,6 +90,7 @@ model User {
   tokenVersion               Int        @default(0) @map("token_version")
   failedLoginAttempts        Int        @default(0) @map("failed_login_attempts")
   lockedUntil                DateTime?  @map("locked_until") @db.Timestamptz(3)
+  lockLevel                  Int        @default(0) @map("lock_level")
   passwordChangedAt          DateTime?  @map("password_changed_at") @db.Timestamptz(3)
   lastLoginAt                DateTime?  @map("last_login_at") @db.Timestamptz(3)
   createdAt                  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)

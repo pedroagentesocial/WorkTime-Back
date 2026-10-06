@@ -44,6 +44,12 @@ export const TimekeepingErrors = {
   dailyReportNotFound: () =>
     new NotFoundError('DAILY_REPORT_NOT_FOUND', 'El reporte del día no existe'),
   employeeNotFound: () => new NotFoundError('EMPLOYEE_NOT_FOUND', 'El empleado no existe'),
+  exportTooLarge: (max: number) =>
+    new ValidationError(
+      'EXPORT_TOO_LARGE',
+      `Hay demasiados reportes para exportar de una vez; acota el rango de fechas (máximo ${max})`,
+      { max },
+    ),
   timeEntryNotFound: () =>
     new NotFoundError('TIME_ENTRY_NOT_FOUND', 'El registro de asistencia no existe'),
   changedConcurrently: () =>

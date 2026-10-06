@@ -18,6 +18,7 @@ export interface CurrentUserProfile {
     readonly name: string;
     readonly timezone: string;
   } | null;
+  readonly employee: { readonly employeeCode: string; readonly timezone: string } | null;
   readonly permissions: readonly Permission[];
 }
 
@@ -32,6 +33,9 @@ export function toProfile(account: UserAccount): CurrentUserProfile {
     mustChangePassword: account.mustChangePassword,
     company: company
       ? { id: company.id, code: company.code, name: company.name, timezone: company.timezone }
+      : null,
+    employee: account.employee
+      ? { employeeCode: account.employee.employeeCode, timezone: account.employee.timezone }
       : null,
     permissions: permissionsOf(account.role),
   };
