@@ -19,7 +19,7 @@ interface Deps {
   db: PrismaDb;
 }
 
-const EMPLOYEE_SELECT = {
+export const EMPLOYEE_SELECT = {
   id: true,
   employeeCode: true,
   phone: true,
@@ -43,7 +43,7 @@ const EMPLOYEE_SELECT = {
   },
 } satisfies Prisma.EmployeeSelect;
 
-type EmployeeRow = Prisma.EmployeeGetPayload<{ select: typeof EMPLOYEE_SELECT }>;
+export type EmployeeRow = Prisma.EmployeeGetPayload<{ select: typeof EMPLOYEE_SELECT }>;
 
 export class PrismaEmployeeRepository implements EmployeeRepository {
   private readonly db: PrismaDb;
@@ -265,7 +265,7 @@ function fromDbDate(date: Date | null): string | null {
   return date ? date.toISOString().slice(0, 10) : null;
 }
 
-function toView(row: EmployeeRow): EmployeeView {
+export function toView(row: EmployeeRow): EmployeeView {
   const latestUpdate = row.user.updatedAt > row.updatedAt ? row.user.updatedAt : row.updatedAt;
   return {
     id: row.id,

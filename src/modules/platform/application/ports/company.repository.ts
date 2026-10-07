@@ -60,6 +60,8 @@ export interface CompanyRepository {
   emailExists(email: string): Promise<boolean>;
   findById(id: string): Promise<CompanyView | null>;
   list(filter: CompanyListFilter, page: PageRequest): Promise<Page<CompanyView>>;
+  // Las empresas asignadas a un admin multiempresa, por nombre
+  listByMember(userId: string): Promise<CompanyView[]>;
   update(id: string, patch: CompanyPatch): Promise<void>;
   setStatus(id: string, status: CompanyStatus): Promise<void>;
   resetAdminPassword(

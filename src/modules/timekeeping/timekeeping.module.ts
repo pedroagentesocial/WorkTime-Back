@@ -58,6 +58,18 @@ import {
 import { PrismaEmployeeDirectory } from './infrastructure/prisma-employee-directory.js';
 import { PrismaTimeEntryRepository } from './infrastructure/prisma-time-entry.repository.js';
 import { timekeepingRoutes } from './presentation/timekeeping.routes.js';
+import {
+  ExportPortfolioDailyReportsUseCase,
+  ListPortfolioDailyReportsUseCase,
+} from './application/portfolio-daily-reports.use-cases.js';
+import { GetPortfolioSummaryUseCase } from './application/portfolio-summary.use-case.js';
+import {
+  ExportPortfolioTimesheetUseCase,
+  GetPortfolioTimesheetUseCase,
+} from './application/portfolio-timesheet.use-cases.js';
+import type { PortfolioDailyReportReader } from './application/ports/portfolio-daily-report.reader.js';
+import { PrismaPortfolioDailyReportReader } from './infrastructure/prisma-portfolio-daily-report.reader.js';
+import { portfolioRoutes } from './presentation/portfolio.routes.js';
 
 declare module '#shared/composition/container.js' {
   interface Cradle {
@@ -98,6 +110,12 @@ declare module '#shared/composition/container.js' {
     listCompanyPendingReports: ListCompanyPendingReportsUseCase;
     getCompanyTimesheet: GetCompanyTimesheetUseCase;
     exportCompanyTimesheet: ExportCompanyTimesheetUseCase;
+    portfolioDailyReportReader: PortfolioDailyReportReader;
+    getPortfolioSummary: GetPortfolioSummaryUseCase;
+    getPortfolioTimesheet: GetPortfolioTimesheetUseCase;
+    exportPortfolioTimesheet: ExportPortfolioTimesheetUseCase;
+    listPortfolioDailyReports: ListPortfolioDailyReportsUseCase;
+    exportPortfolioDailyReports: ExportPortfolioDailyReportsUseCase;
   }
 }
 
@@ -143,6 +161,12 @@ export const timekeepingModule: AppModule = {
       listCompanyPendingReports: asClass(ListCompanyPendingReportsUseCase).singleton(),
       getCompanyTimesheet: asClass(GetCompanyTimesheetUseCase).singleton(),
       exportCompanyTimesheet: asClass(ExportCompanyTimesheetUseCase).singleton(),
+      portfolioDailyReportReader: asClass(PrismaPortfolioDailyReportReader).singleton(),
+      getPortfolioSummary: asClass(GetPortfolioSummaryUseCase).singleton(),
+      getPortfolioTimesheet: asClass(GetPortfolioTimesheetUseCase).singleton(),
+      exportPortfolioTimesheet: asClass(ExportPortfolioTimesheetUseCase).singleton(),
+      listPortfolioDailyReports: asClass(ListPortfolioDailyReportsUseCase).singleton(),
+      exportPortfolioDailyReports: asClass(ExportPortfolioDailyReportsUseCase).singleton(),
     });
   },
 
@@ -166,5 +190,8 @@ export const timekeepingModule: AppModule = {
     },
   ],
 
-  routes: (container) => timekeepingRoutes(container.cradle),
+  routes: (container) => [
+    ...timekeepingRoutes(container.cradle),
+    ...portfolioRoutes(container.cradle),
+  ],
 };

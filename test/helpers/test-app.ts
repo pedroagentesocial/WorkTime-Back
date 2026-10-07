@@ -51,4 +51,16 @@ export async function login(app: Express, email: string, password: string) {
   };
 }
 
+// Un admin multiempresa elige con que empresa trabaja; devuelve la sesion nueva
+export async function switchCompany(app: Express, accessToken: string, companyId: string | null) {
+  const res = await request(app)
+    .post(api('/auth/active-company'))
+    .set(bearer(accessToken))
+    .send({ companyId });
+  if (res.status !== 200) {
+    throw new Error(`cambio de empresa falló (${res.status}): ${JSON.stringify(res.body)}`);
+  }
+  return res.body.data as { accessToken: string; refreshToken: string };
+}
+
 export const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });

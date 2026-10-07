@@ -7,6 +7,7 @@ import {
   type SecurityEventRecorder,
 } from '#shared/application/ports/security-event-recorder.js';
 import type { UseCase } from '#shared/application/use-case.js';
+import { Role } from '#shared/domain/permissions.js';
 import { IdentityErrors } from './identity-errors.js';
 import type {
   RefreshTokenRepository,
@@ -56,14 +57,17 @@ export class RefreshSessionUseCase implements UseCase<RefreshSessionInput, Issue
       throw IdentityErrors.sessionMaxAgeReached();
     }
 
-    const account = await users.findById(stored.userId);
+    const account = await users.findById(stored.userId, { activeCompanyId: stored.companyId });
     const denial = account?.loginDenial(now);
     if (!account || denial) {
       await tokens.revokeFamily(stored.familyId, now);
       throw denial ? IdentityErrors.accessDenied(denial) : IdentityErrors.invalidRefreshToken();
     }
 
-    if (stored.tokenVersion !== account.tokenVersion) {
+    // Si le quitaron la empresa activa a un admin multiempresa, la sesion ya no sirve
+    const lostCompany =
+      account.role === Role.MULTI_COMPANY_ADMIN && account.companyId !== stored.companyId;
+    if (stored.tokenVersion !== account.tokenVersion || lostCompany) {
       await tokens.revokeFamily(stored.familyId, now);
       throw IdentityErrors.invalidRefreshToken();
     }

@@ -15,7 +15,10 @@ export class TokenAuthenticator implements Authenticator {
 
   async authenticate(accessToken: string): Promise<Actor> {
     const claims = await this.deps.tokenService.verifyAccessToken(accessToken);
-    const account = await this.deps.userAccountRepository.findById(claims.userId);
+    // Un admin multiempresa conserva la empresa del token solo si su membresia sigue vigente
+    const account = await this.deps.userAccountRepository.findById(claims.userId, {
+      activeCompanyId: claims.companyId,
+    });
 
     if (
       !account ||

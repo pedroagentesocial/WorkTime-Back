@@ -35,7 +35,8 @@ export class UpdateProfileUseCase implements UseCase<UpdateProfileInput, Current
     lastName,
   }: UpdateProfileInput): Promise<CurrentUserProfile> {
     const { userAccountRepository: users } = this.deps;
-    const current = await users.findById(actor.userId);
+    const options = { activeCompanyId: actor.companyId };
+    const current = await users.findById(actor.userId, options);
     if (!current) throw IdentityErrors.sessionRevoked();
 
     await users.updateName(actor.userId, firstName, lastName);
@@ -47,7 +48,7 @@ export class UpdateProfileUseCase implements UseCase<UpdateProfileInput, Current
       metadata: { previousFirstName: current.firstName, previousLastName: current.lastName },
     });
 
-    const updated = await users.findById(actor.userId);
+    const updated = await users.findById(actor.userId, options);
     if (!updated) throw IdentityErrors.sessionRevoked();
     return toProfile(updated);
   }

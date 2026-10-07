@@ -20,6 +20,7 @@ enum CompanyStatus {
 enum UserRole {
   platform_admin
   company_admin
+  multi_company_admin
   employee
 
   @@map("user_role")
@@ -71,6 +72,8 @@ model Company {
   dailyReports         DailyReport[]
   dailyReportRevisions DailyReportRevision[]
   payPeriodClosures    PayPeriodClosure[]
+  memberships          CompanyMembership[]
+  refreshTokens        RefreshToken[]
 
   @@index([status])
   @@map("companies")
@@ -96,13 +99,15 @@ model User {
   createdAt                  DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt                  DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  company        Company?              @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  employee       Employee?
-  refreshTokens  RefreshToken[]
-  corrections    TimeEntryCorrection[]
-  voidedEntries  TimeEntry[]           @relation("TimeEntryVoidedBy")
-  closedPeriods  PayPeriodClosure[]
-  securityEvents SecurityEvent[]
+  company           Company?              @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  employee          Employee?
+  refreshTokens     RefreshToken[]
+  multiCompanyAdmin MultiCompanyAdmin?
+  memberships       CompanyMembership[]
+  corrections       TimeEntryCorrection[]
+  voidedEntries     TimeEntry[]           @relation("TimeEntryVoidedBy")
+  closedPeriods     PayPeriodClosure[]
+  securityEvents    SecurityEvent[]
 
   /// Un solo admin por empresa
   @@unique([companyId], map: "users_one_company_admin_per_company", where: raw("role = 'company_admin'"))
@@ -118,6 +123,8 @@ model RefreshToken {
   familyId     String    @map("family_id") @db.Uuid
   tokenHash    String    @unique @map("token_hash") @db.Char(64)
   tokenVersion Int       @map("token_version")
+  /// Empresa activa de la sesion de un admin multiempresa; null para el resto
+  companyId    String?   @map("company_id") @db.Uuid
   expiresAt    DateTime  @map("expires_at") @db.Timestamptz(3)
   revokedAt    DateTime? @map("revoked_at") @db.Timestamptz(3)
   replacedById String?   @map("replaced_by_id") @db.Uuid
@@ -125,11 +132,39 @@ model RefreshToken {
   userAgent    String?   @map("user_agent") @db.VarChar(255)
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  user    User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Restrict)
 
   @@index([userId])
   @@index([familyId])
   @@map("refresh_tokens")
+}
+
+/// Limites del paquete de un admin multiempresa; los fija solo el admin global
+model MultiCompanyAdmin {
+  userId                 String   @id @map("user_id") @db.Uuid
+  maxCompanies           Int      @map("max_companies")
+  maxEmployeesPerCompany Int      @map("max_employees_per_company")
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt              DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("multi_company_admins")
+}
+
+/// Empresas a las que un admin multiempresa tiene acceso; quitar la fila quita el acceso
+model CompanyMembership {
+  userId    String   @map("user_id") @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
+
+  @@id([userId, companyId])
+  @@index([companyId])
+  @@map("company_memberships")
 }
 
 model SecurityEvent {

@@ -20,6 +20,8 @@ export interface CreateCompanyInput {
   readonly name: string;
   readonly timezone?: string | undefined;
   readonly maxEmployees: number;
+  // Dentro de una transaccion un choque de codigo la aborta: quien llama reintenta con intentos en 1
+  readonly identifierAttempts?: number | undefined;
   readonly admin: { readonly email: string; readonly firstName: string; readonly lastName: string };
 }
 
@@ -58,6 +60,7 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
     const companyId = idGenerator.generate();
     const adminId = idGenerator.generate();
 
+    const maxAttempts = input.identifierAttempts ?? MAX_IDENTIFIER_ATTEMPTS;
     for (let attempt = 1; ; attempt += 1) {
       const randomInt = (max: number) => this.deps.secureRandom.int(max);
       try {
@@ -82,7 +85,7 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
         break;
       } catch (error) {
         const taken = error instanceof AppError && error.code === 'COMPANY_IDENTIFIER_TAKEN';
-        if (!taken || attempt >= MAX_IDENTIFIER_ATTEMPTS) throw error;
+        if (!taken || attempt >= maxAttempts) throw error;
       }
     }
 

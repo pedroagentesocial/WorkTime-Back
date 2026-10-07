@@ -1,12 +1,23 @@
 import { resolveTimezone } from '#shared/domain/timezone.js';
 import type { PrismaDb } from '#shared/infrastructure/prisma/prisma-db.js';
 import type { Prisma } from '#generated/prisma/client.js';
-import type { UserAccountRepository } from '../application/ports/user-account.repository.js';
-import { UserAccount } from '../domain/user-account.js';
+import type {
+  FindByIdOptions,
+  UserAccountRepository,
+} from '../application/ports/user-account.repository.js';
+import { UserAccount, type AccountCompany } from '../domain/user-account.js';
 
 interface Deps {
   db: PrismaDb;
 }
+
+const COMPANY_SELECT = {
+  id: true,
+  code: true,
+  name: true,
+  timezone: true,
+  status: true,
+} satisfies Prisma.CompanySelect;
 
 const ACCOUNT_SELECT = {
   id: true,
@@ -21,7 +32,7 @@ const ACCOUNT_SELECT = {
   tokenVersion: true,
   lockedUntil: true,
   lockLevel: true,
-  company: { select: { id: true, code: true, name: true, timezone: true, status: true } },
+  company: { select: COMPANY_SELECT },
   employee: { select: { employeeCode: true, timezone: true } },
 } satisfies Prisma.UserSelect;
 
@@ -39,9 +50,26 @@ export class PrismaUserAccountRepository implements UserAccountRepository {
     return row ? toDomain(row) : null;
   }
 
-  async findById(id: string): Promise<UserAccount | null> {
+  async findById(id: string, options: FindByIdOptions = {}): Promise<UserAccount | null> {
     const row = await this.db.client.user.findUnique({ where: { id }, select: ACCOUNT_SELECT });
-    return row ? toDomain(row) : null;
+    if (!row) return null;
+    const account = toDomain(row);
+    if (row.role !== 'multi_company_admin' || !options.activeCompanyId) return account;
+
+    const company = await this.findMemberCompany(row.id, options.activeCompanyId);
+    return company ? account.withActiveCompany(company) : account;
+  }
+
+  // La membresia es lo unico que da acceso a una empresa a un admin multiempresa
+  private async findMemberCompany(
+    userId: string,
+    companyId: string,
+  ): Promise<AccountCompany | null> {
+    const membership = await this.db.client.companyMembership.findUnique({
+      where: { userId_companyId: { userId, companyId } },
+      select: { company: { select: COMPANY_SELECT } },
+    });
+    return membership?.company ?? null;
   }
 
   async reserveLoginAttempt(userId: string, now: Date): Promise<number | null> {

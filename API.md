@@ -27,13 +27,14 @@ API de control de asistencia multiempresa. Este documento explica **cómo funcio
 
 **Empresas.** El sistema es multiempresa. Cada empresa tiene su propio administrador y sus empleados, y **nunca ve datos de otra**. La empresa se identifica por su `id` (UUID) y por un **código** legible como `K7QF-29MX`, pensado para soporte (por ejemplo, si alguien pide por correo restablecer una contraseña). El código **identifica, no autentica**: no es un secreto.
 
-**Roles.** Hay tres:
+**Roles.** Hay cuatro:
 
-| Rol                                | Qué hace                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `platform_admin` (admin global)    | Crea, edita y suspende empresas. No pertenece a ninguna.                                                   |
-| `company_admin` (admin de empresa) | Uno por empresa. Gestiona empleados, ve y corrige la asistencia, cierra periodos. **No marca asistencia.** |
-| `employee` (empleado)              | Marca entrada y salida, escribe su reporte diario y consulta su historial.                                 |
+| Rol                                        | Qué hace                                                                                                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform_admin` (admin global)            | Crea, edita y suspende empresas. No pertenece a ninguna.                                                                                             |
+| `company_admin` (admin de empresa)         | Uno por empresa. Gestiona empleados, ve y corrige la asistencia, cierra periodos. **No marca asistencia.**                                           |
+| `multi_company_admin` (admin multiempresa) | Una persona que administra **varias empresas**, solo las que el admin global le asigna o las que crea dentro de su paquete. Trabaja en una a la vez. |
+| `employee` (empleado)                      | Marca entrada y salida, escribe su reporte diario y consulta su historial.                                                                           |
 
 **Marcajes (`time entries`).** Un marcaje es una jornada con entrada y salida. Un empleado puede tener **varios por día** (por ejemplo, salir a comer y volver a entrar), pero **solo uno abierto a la vez**. No hay "pausas": una pausa es una salida y una entrada.
 
@@ -339,21 +340,26 @@ const { data: status } = await client.request('GET', '/me/clock-status');
 
 Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de permisos:
 
-| Permiso                      | Admin global | Admin de empresa | Empleado |
-| ---------------------------- | :----------: | :--------------: | :------: |
-| `companies.manage`           |      sí      |                  |          |
-| `company.settings.manage`    |              |        sí        |          |
-| `employees.manage`           |              |        sí        |          |
-| `attendance.read_all`        |              |        sí        |          |
-| `time_entries.correct`       |              |        sí        |          |
-| `attendance.clock_employees` |              |        sí        |          |
-| `periods.manage`             |              |        sí        |          |
-| `attendance.clock_own`       |              |                  |    sí    |
-| `attendance.read_own`        |              |                  |    sí    |
+| Permiso                      | Admin global | Admin de empresa | Admin multiempresa | Empleado |
+| ---------------------------- | :----------: | :--------------: | :----------------: | :------: |
+| `companies.manage`           |      sí      |                  |                    |          |
+| `multi_admins.manage`        |      sí      |                  |                    |          |
+| `portfolio.read`             |              |                  |         sí         |          |
+| `portfolio.companies.create` |              |                  |         sí         |          |
+| `company.settings.manage`    |              |        sí        |         sí         |          |
+| `employees.manage`           |              |        sí        |         sí         |          |
+| `attendance.read_all`        |              |        sí        |         sí         |          |
+| `time_entries.correct`       |              |        sí        |         sí         |          |
+| `attendance.clock_employees` |              |        sí        |         sí         |          |
+| `periods.manage`             |              |        sí        |         sí         |          |
+| `attendance.clock_own`       |              |                  |                    |    sí    |
+| `attendance.read_own`        |              |                  |                    |    sí    |
 
 `GET /auth/me` devuelve la lista de `permissions` del usuario: sirve para decidir qué pantallas y botones mostrar. Un usuario que intenta usar un endpoint sin el permiso recibe `403 FORBIDDEN`.
 
 **Aislamiento entre empresas.** La empresa **sale siempre del token**, nunca de lo que mande el cliente. Un recurso de otra empresa responde `404`, igual que uno que no existe.
+
+**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una y recibe una sesión nueva cuya empresa activa es esa. Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
 
 ---
 
@@ -530,6 +536,34 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 ---
 
+### Administradores multiempresa
+
+- `POST /platform/multi-admins` crea a la persona con su **paquete**: `maxCompanies` (cuántas empresas puede tener) y `maxEmployeesPerCompany` (empleados máximos de cada empresa que cree). Devuelve su **contraseña temporal una sola vez**.
+- `GET /platform/multi-admins` lista, con `search` y `status`. `GET /platform/multi-admins/{id}` muestra a la persona con sus empresas.
+- `PATCH /platform/multi-admins/{id}` cambia nombre y paquete. El máximo de empresas no puede quedar por debajo de las que ya tiene (`409 MAX_COMPANIES_BELOW_ASSIGNED`).
+- `PATCH /platform/multi-admins/{id}/status` la desactiva o reactiva. Al desactivarla pierde el acceso al instante.
+- `POST /platform/multi-admins/{id}/reset-password` genera una contraseña temporal y cierra sus sesiones.
+- `POST /platform/multi-admins/{id}/companies` le asigna una empresa **que ya existe** (`409 MAX_COMPANIES_REACHED` si ya llegó a su máximo) y `DELETE /platform/multi-admins/{id}/companies/{companyId}` se la quita. Quitar una empresa no toca la empresa ni sus datos.
+
+Paquetes: una empresa con su admin de empresa es el paquete de una empresa. Para varias empresas se crea un admin multiempresa con el máximo que corresponda. Una empresa siempre nace con su admin de empresa, y esa persona convive con el admin multiempresa.
+
+### Pantallas del admin multiempresa
+
+- `GET /portfolio/companies` devuelve sus empresas (por nombre) y lo que le queda de su paquete. Sirve para el selector de empresa.
+- `POST /portfolio/companies` crea una empresa con su admin dentro de su paquete. La empresa nace con `maxEmployeesPerCompany` empleados de máximo y queda asignada a la persona. `409 MAX_COMPANIES_REACHED` si ya llegó a su máximo. Devuelve la contraseña temporal del admin de la empresa una sola vez.
+- `POST /auth/active-company` elige la empresa con la que trabaja (ver sección 5).
+
+**Vistas de todas sus empresas** (solo lectura, no dependen de la empresa activa de la sesión; solo cuentan sus empresas **activas**, las suspendidas quedan fuera):
+
+- `GET /portfolio/summary` es su panel: empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y reportes pendientes, en total y por empresa, más las horas de todos por día del periodo. El periodo no avanza hasta que todas sus empresas terminaron el anterior.
+- `GET /portfolio/employees` lista los empleados de todas sus empresas, con la empresa de cada uno. Filtra por `search`, `status` y `companyId`.
+- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila.
+- `GET /portfolio/daily-reports` lista los reportes de todas sus empresas y `GET /portfolio/daily-reports/export` los baja en CSV, también con la empresa. Con más de 5000 reportes hay que acotar el rango.
+- Todas aceptan `companyId` para acotar a una empresa; una que no es suya responde `404 COMPANY_NOT_FOUND`, igual que una inexistente o suspendida.
+- No puede cambiar el límite de empleados de una empresa, suspenderla ni cambiar su propio paquete: eso es solo del admin global.
+
+---
+
 ## 10. Qué hacer ante cada error
 
 Decide por `error.code`, no por el texto. Los casos más importantes:
@@ -545,6 +579,7 @@ Decide por `error.code`, no por el texto. Los casos más importantes:
 | `USER_INACTIVE`, `COMPANY_SUSPENDED`                                        | 403  | Mostrar que no tiene acceso; no insistir.                                                              |
 | `TEMPORARY_PASSWORD_EXPIRED`                                                | 403  | Pedir al admin una contraseña temporal nueva.                                                          |
 | `FORBIDDEN`                                                                 | 403  | El usuario no tiene el permiso. Revisa los `permissions` de `/auth/me`.                                |
+| `COMPANY_REQUIRED`                                                          | 403  | Es un admin multiempresa sin empresa activa: pedirle que elija una (`POST /auth/active-company`).      |
 | `VALIDATION_ERROR`                                                          | 400  | Mostrar los mensajes de `error.details` junto a cada campo (`path`).                                   |
 | `DAILY_REPORT_PENDING`                                                      | 409  | Mostrar `error.details.dates` y dejar escribir los reportes.                                           |
 | `DAILY_REPORT_REQUIRED`                                                     | 400  | Pedir el reporte antes de marcar la salida.                                                            |
@@ -609,6 +644,7 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`POST /auth/logout`](#op-post-auth-logout) — Cerrar sesión
 - [`GET /auth/me`](#op-get-auth-me) — Perfil del usuario autenticado
 - [`PATCH /auth/me`](#op-patch-auth-me) — Cambiar mi nombre
+- [`POST /auth/active-company`](#op-post-auth-active-company) — Elegir la empresa con la que trabajo
 - [`POST /auth/me/logout-all`](#op-post-auth-me-logout-all) — Cerrar todas mis sesiones
 - [`PATCH /auth/me/password`](#op-patch-auth-me-password) — Cambiar mi contraseña
 
@@ -620,6 +656,22 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`PATCH /platform/companies/{id}`](#op-patch-platform-companies-id) — Editar una empresa
 - [`PATCH /platform/companies/{id}/status`](#op-patch-platform-companies-id-status) — Suspender o reactivar una empresa
 - [`POST /platform/companies/{id}/admin/reset-password`](#op-post-platform-companies-id-admin-reset-password) — Restablecer la contraseña del admin de una empresa
+
+**Plataforma · Administradores multiempresa**
+
+- [`GET /platform/multi-admins`](#op-get-platform-multi-admins) — Listar administradores multiempresa
+- [`POST /platform/multi-admins`](#op-post-platform-multi-admins) — Crear un administrador multiempresa
+- [`GET /platform/multi-admins/{id}`](#op-get-platform-multi-admins-id) — Detalle de un administrador multiempresa y sus empresas
+- [`PATCH /platform/multi-admins/{id}`](#op-patch-platform-multi-admins-id) — Editar un administrador multiempresa
+- [`PATCH /platform/multi-admins/{id}/status`](#op-patch-platform-multi-admins-id-status) — Desactivar o reactivar un administrador multiempresa
+- [`POST /platform/multi-admins/{id}/reset-password`](#op-post-platform-multi-admins-id-reset-password) — Restablecer la contraseña de un administrador multiempresa
+- [`POST /platform/multi-admins/{id}/companies`](#op-post-platform-multi-admins-id-companies) — Asignar una empresa existente a un administrador multiempresa
+- [`DELETE /platform/multi-admins/{id}/companies/{companyId}`](#op-delete-platform-multi-admins-id-companies-companyid) — Quitar una empresa a un administrador multiempresa
+
+**Admin multiempresa · Mis empresas**
+
+- [`GET /portfolio/companies`](#op-get-portfolio-companies) — Mis empresas y lo que me queda de mi paquete
+- [`POST /portfolio/companies`](#op-post-portfolio-companies) — Crear una empresa dentro de mi paquete
 
 **Empresa · Configuración**
 
@@ -636,6 +688,15 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`PATCH /company/employees/{id}/status`](#op-patch-company-employees-id-status) — Activar o desactivar un empleado
 - [`POST /company/employees/{id}/revoke-sessions`](#op-post-company-employees-id-revoke-sessions) — Cerrar las sesiones de un empleado
 - [`POST /company/employees/{id}/reset-password`](#op-post-company-employees-id-reset-password) — Restablecer la contraseña de un empleado
+
+**Admin multiempresa · Todas mis empresas**
+
+- [`GET /portfolio/employees`](#op-get-portfolio-employees) — Empleados de todas mis empresas
+- [`GET /portfolio/summary`](#op-get-portfolio-summary) — Panel de todas mis empresas
+- [`GET /portfolio/timesheet`](#op-get-portfolio-timesheet) — Horas de todos mis empleados
+- [`GET /portfolio/timesheet/export`](#op-get-portfolio-timesheet-export) — Exportar las horas de todas mis empresas a CSV
+- [`GET /portfolio/daily-reports`](#op-get-portfolio-daily-reports) — Reportes diarios de todas mis empresas
+- [`GET /portfolio/daily-reports/export`](#op-get-portfolio-daily-reports-export) — Exportar los reportes de todas mis empresas a CSV
 
 **Empleado · Asistencia**
 
@@ -820,6 +881,34 @@ Solo nombre y apellido. El email es la identidad de acceso y no se edita aquí.
 | 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-post-auth-active-company"></a>
+#### `POST /auth/active-company`
+
+**Elegir la empresa con la que trabajo**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Solo para el admin multiempresa. Emite una sesión nueva cuya empresa activa es la elegida; desde ahí se trabaja como admin de esa empresa. Con `companyId: null` la sesión queda sin empresa activa. Las sesiones anteriores siguen válidas hasta cerrarlas.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) o null | sí | Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, para ver el resumen de todas tus empresas. |
+
+**Respuesta 200:** Sesión nueva
+
+- `data`: [LoginResponse](#schema-loginresponse)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `COMPANY_SUSPENDED` · `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` | La empresa está suspendida |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no está asignada a la cuenta |
 
 <a id="op-post-auth-me-logout-all"></a>
 #### `POST /auth/me/logout-all`
@@ -1068,6 +1157,324 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas las sesi
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `COMPANY_NOT_FOUND` · `COMPANY_ADMIN_NOT_FOUND` | Empresa o admin inexistente |
 
+### Plataforma · Administradores multiempresa
+
+<a id="op-get-platform-multi-admins"></a>
+#### `GET /platform/multi-admins`
+
+**Listar administradores multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Del más reciente al más antiguo.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `search` | texto | no | Busca por correo o nombre (1 a 100 caracteres) |
+| `status` | `active` \| `inactive` | no | — |
+
+**Respuesta 200:** Página de administradores
+
+- `data`: [MultiAdmin](#schema-multiadmin)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-post-platform-multi-admins"></a>
+#### `POST /platform/multi-admins`
+
+**Crear un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Lo crea sin empresas, con su paquete: máximo de empresas y de empleados por empresa. Devuelve una contraseña temporal (se muestra una sola vez).
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `email` | texto | sí | (ej. `"ana@empresa.com"`) |
+| `firstName` | texto | sí | (1 a 100 caracteres; ej. `"Laura"`) |
+| `lastName` | texto | sí | (1 a 100 caracteres; ej. `"Gómez"`) |
+| `maxCompanies` | entero | sí | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
+| `maxEmployeesPerCompany` | entero | sí | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
+
+**Respuesta 201:** Creado
+
+- `data`: [CreateMultiAdminResponse](#schema-createmultiadminresponse)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_MAX_COMPANIES` · `INVALID_MAX_EMPLOYEES` · `VALIDATION_ERROR` · `INVALID_JSON` | Límites inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 409 | `EMAIL_TAKEN` | El email ya está registrado |
+
+<a id="op-get-platform-multi-admins-id"></a>
+#### `GET /platform/multi-admins/{id}`
+
+**Detalle de un administrador multiempresa y sus empresas**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Respuesta 200:** Administrador y empresas
+
+- `data`: [MultiAdminDetail](#schema-multiadmindetail)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` | El administrador multiempresa no existe |
+
+<a id="op-patch-platform-multi-admins-id"></a>
+#### `PATCH /platform/multi-admins/{id}`
+
+**Editar un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Nombre y paquete. Solo se modifican los campos enviados.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `firstName` | texto | no | (1 a 100 caracteres) |
+| `lastName` | texto | no | (1 a 100 caracteres) |
+| `maxCompanies` | entero | no | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
+| `maxEmployeesPerCompany` | entero | no | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
+
+**Respuesta 200:** Actualizado
+
+- `data`: [MultiAdmin](#schema-multiadmin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_MAX_COMPANIES` · `INVALID_MAX_EMPLOYEES` · `VALIDATION_ERROR` · `INVALID_JSON` | Límites inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` | El administrador multiempresa no existe |
+| 409 | `MAX_COMPANIES_BELOW_ASSIGNED` | El máximo es menor a las empresas que ya tiene |
+
+<a id="op-patch-platform-multi-admins-id-status"></a>
+#### `PATCH /platform/multi-admins/{id}/status`
+
+**Desactivar o reactivar un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Al desactivarlo pierde el acceso de inmediato. Sus empresas y datos se conservan.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `status` | `active` \| `inactive` | sí | — |
+
+**Respuesta 200:** Estado actualizado
+
+- `data`: [MultiAdmin](#schema-multiadmin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` | El administrador multiempresa no existe |
+
+<a id="op-post-platform-multi-admins-id-reset-password"></a>
+#### `POST /platform/multi-admins/{id}/reset-password`
+
+**Restablecer la contraseña de un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Genera una contraseña temporal (se muestra una sola vez), cierra todas sus sesiones y desbloquea su cuenta.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Respuesta 200:** Contraseña restablecida
+
+- `data`: [CreateMultiAdminResponse](#schema-createmultiadminresponse)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` | El administrador multiempresa no existe |
+
+<a id="op-post-platform-multi-admins-id-companies"></a>
+#### `POST /platform/multi-admins/{id}/companies`
+
+**Asignar una empresa existente a un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Le da acceso a la empresa, sin pasar de su máximo de empresas. La empresa conserva su propio admin de empresa.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) | sí | — |
+
+**Respuesta 201:** Empresa asignada
+
+- `data`: [MultiAdmin](#schema-multiadmin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` · `COMPANY_NOT_FOUND` | El administrador o la empresa no existen |
+| 409 | `COMPANY_ALREADY_ASSIGNED` · `MAX_COMPANIES_REACHED` | Ya la tiene o llegó a su máximo de empresas |
+
+<a id="op-delete-platform-multi-admins-id-companies-companyid"></a>
+#### `DELETE /platform/multi-admins/{id}/companies/{companyId}`
+
+**Quitar una empresa a un administrador multiempresa**
+
+**Acceso:** permiso `multi_admins.manage` (admin global).
+
+Pierde el acceso a esa empresa de inmediato. La empresa y sus datos no se tocan.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `companyId` | texto (uuid) | sí | — |
+
+**Respuesta 200:** Empresa quitada
+
+- `data`: [MultiAdmin](#schema-multiadmin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `MULTI_ADMIN_NOT_FOUND` · `MEMBERSHIP_NOT_FOUND` | El administrador no existe o no tenía esa empresa |
+
+### Admin multiempresa · Mis empresas
+
+<a id="op-get-portfolio-companies"></a>
+#### `GET /portfolio/companies`
+
+**Mis empresas y lo que me queda de mi paquete**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Las empresas a las que tiene acceso, por nombre, con su máximo de empresas y el de empleados por empresa que cree. Sirve para el selector de empresa.
+
+**Respuesta 200:** Mis empresas
+
+- `data`: [MyCompanies](#schema-mycompanies)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-post-portfolio-companies"></a>
+#### `POST /portfolio/companies`
+
+**Crear una empresa dentro de mi paquete**
+
+**Acceso:** permiso `portfolio.companies.create` (multi_company_admin).
+
+Crea la empresa con su admin y me la asigna. Su máximo de empleados es el que fijó el admin global para mi paquete. Devuelve la contraseña temporal del admin una sola vez.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | sí | (2 a 150 caracteres; ej. `"Sucursal Norte"`) |
+| `timezone` | texto | no | Zona horaria IANA. Si se omite se usa America/Denver. (1 a 64 caracteres) |
+| `admin` | objeto | sí | El admin de la nueva empresa. Recibe una contraseña temporal. |
+| `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
+| `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
+| `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+
+**Respuesta 201:** Empresa creada
+
+- `data`: [CreateCompanyResponse](#schema-createcompanyresponse)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_TIMEZONE` · `INVALID_COMPANY_NAME` · `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 409 | `MAX_COMPANIES_REACHED` · `EMAIL_TAKEN` | Llegó a su máximo de empresas o el email ya está registrado |
+
 ### Empresa · Configuración
 
 <a id="op-get-company"></a>
@@ -1075,7 +1482,7 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas las sesi
 
 **Datos de mi empresa**
 
-**Acceso:** permiso `company.settings.manage` (admin de empresa).
+**Acceso:** permiso `company.settings.manage` (admin de empresa, multi_company_admin).
 
 **Respuesta 200:** Empresa
 
@@ -1093,7 +1500,7 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas las sesi
 
 **Editar mi empresa**
 
-**Acceso:** permiso `company.settings.manage` (admin de empresa).
+**Acceso:** permiso `company.settings.manage` (admin de empresa, multi_company_admin).
 
 Nombre y zona horaria. El límite de empleados y el estado solo los cambia el admin global.
 
@@ -1125,7 +1532,7 @@ Nombre y zona horaria. El límite de empleados y el estado solo los cambia el ad
 
 **Listar empleados**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Ordenados por apellido y nombre.
 
@@ -1164,7 +1571,7 @@ Ordenados por apellido y nombre.
 
 **Dar de alta un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Crea el empleado con su usuario y una contraseña temporal (se muestra una sola vez; deberá cambiarla al entrar). Respeta el límite de empleados activos de la empresa.
 
@@ -1197,7 +1604,7 @@ Crea el empleado con su usuario y una contraseña temporal (se muestra una sola 
 
 **Detalle de un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 **Parámetros de la ruta:**
 
@@ -1223,7 +1630,7 @@ Crea el empleado con su usuario y una contraseña temporal (se muestra una sola 
 
 **Editar un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Solo se modifican los campos enviados. `timezone: null` hace que herede la de la empresa.
 
@@ -1262,7 +1669,7 @@ Solo se modifican los campos enviados. `timezone: null` hace que herede la de la
 
 **Eliminar un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Solo funciona con un empleado que nunca registró horas ni reportes (por ejemplo un alta por error). Borra su cuenta y su historial de accesos, libera su correo y su lugar en el tope de empleados; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY`: desactívalo en su lugar.
 
@@ -1289,7 +1696,7 @@ Solo funciona con un empleado que nunca registró horas ni reportes (por ejemplo
 
 **Activar o desactivar un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Desactivar le quita el acceso al instante y conserva su historial. Reactivar requiere lugar dentro del límite de la empresa.
 
@@ -1324,7 +1731,7 @@ Desactivar le quita el acceso al instante y conserva su historial. Reactivar req
 
 **Cerrar las sesiones de un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Cierra al instante todas las sesiones abiertas del empleado, por ejemplo si perdió su celular. No cambia su contraseña ni lo desactiva: puede iniciar sesión de nuevo.
 
@@ -1350,7 +1757,7 @@ Cierra al instante todas las sesiones abiertas del empleado, por ejemplo si perd
 
 **Restablecer la contraseña de un empleado**
 
-**Acceso:** permiso `employees.manage` (admin de empresa).
+**Acceso:** permiso `employees.manage` (admin de empresa, multi_company_admin).
 
 Genera una contraseña temporal (se muestra una sola vez), cierra sus sesiones y desbloquea su cuenta.
 
@@ -1372,6 +1779,230 @@ Genera una contraseña temporal (se muestra una sola vez), cierra sus sesiones y
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
+
+### Admin multiempresa · Todas mis empresas
+
+<a id="op-get-portfolio-employees"></a>
+#### `GET /portfolio/employees`
+
+**Empleados de todas mis empresas**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Por empresa, apellido y nombre, con la empresa de cada empleado. Solo cuenta las empresas activas. Solo lectura: para cambiar algo hay que elegir la empresa.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+| `status` | `active` \| `inactive` | no | — |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404 |
+
+**Respuesta 200:** Empleados
+
+- `data`: [PortfolioEmployee](#schema-portfolioemployee)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-summary"></a>
+#### `GET /portfolio/summary`
+
+**Panel de todas mis empresas**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y reportes pendientes, en total y por empresa. Solo cuenta las empresas activas; las suspendidas quedan fuera.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Resumen
+
+- `data`: [PortfolioSummary](#schema-portfoliosummary)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-timesheet"></a>
+#### `GET /portfolio/timesheet`
+
+**Horas de todos mis empleados**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Periodo de pago de 14 días con una fila por empleado de todas mis empresas activas, con su empresa, y los totales de todos. Solo cuentan los marcajes cerrados. Sin `date` devuelve el periodo actual (el de la empresa más atrasada en el calendario).
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Hoja de tiempo
+
+- `data`: [PortfolioTimesheetRow](#schema-portfoliotimesheetrow)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+| `period` | objeto | — |
+| `period.start` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `period.end` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `previousPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `nextPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `days` | objeto[] | — |
+| `days[].date` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `days[].weekday` | `monday` \| `tuesday` \| `wednesday` \| `thursday` \| `friday` \| `saturday` \| `sunday` | — |
+| `totals` | objeto | — |
+| `totals.hours` | número[] | — |
+| `totals.totalHours` | número | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-timesheet-export"></a>
+#### `GET /portfolio/timesheet/export`
+
+**Exportar las horas de todas mis empresas a CSV**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+La misma tabla de `/portfolio/timesheet`, sin paginar, como archivo CSV (UTF-8, horas con 2 decimales) con la empresa de cada empleado en las primeras columnas.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Archivo CSV
+
+Devuelve un archivo CSV (`text/csv`), no JSON.
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-daily-reports"></a>
+#### `GET /portfolio/daily-reports`
+
+**Reportes diarios de todas mis empresas**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Los más recientes primero, con la empresa y el empleado de cada uno. Filtra por día laboral (`from`/`to`) y por empresa.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Reportes
+
+- `data`: [PortfolioDailyReport](#schema-portfoliodailyreport)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-daily-reports-export"></a>
+#### `GET /portfolio/daily-reports/export`
+
+**Exportar los reportes de todas mis empresas a CSV**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Los mismos reportes de `/portfolio/daily-reports`, sin paginar, como archivo CSV (UTF-8) con la empresa al inicio de cada fila. Con más de 5000 reportes hay que acotar el rango.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Archivo CSV
+
+Devuelve un archivo CSV (`text/csv`), no JSON.
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `EXPORT_TOO_LARGE` · `VALIDATION_ERROR` | Rango inválido o demasiados reportes |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
 
 ### Empleado · Asistencia
 
@@ -1618,7 +2249,7 @@ Filtra por día laboral (`from`/`to`, inclusive). `meta.totalHours` suma las hor
 
 **Marcar entrada a un empleado**
 
-**Acceso:** permiso `attendance.clock_employees` (admin de empresa).
+**Acceso:** permiso `attendance.clock_employees` (admin de empresa, multi_company_admin).
 
 La hora la pone el servidor. Queda auditado quién lo hizo y el marcaje se ve como "admin". Si el empleado ya alcanzó su límite diario responde 409 `DAILY_LIMIT_REACHED`; con `overrideDailyLimit: true` se autoriza trabajar por encima del límite.
 
@@ -1653,7 +2284,7 @@ La hora la pone el servidor. Queda auditado quién lo hizo y el marcaje se ve co
 
 **Marcar salida a un empleado**
 
-**Acceso:** permiso `attendance.clock_employees` (admin de empresa).
+**Acceso:** permiso `attendance.clock_employees` (admin de empresa, multi_company_admin).
 
 La hora la pone el servidor. Queda auditado quién lo hizo y el marcaje muestra `closedBy: admin`.
 
@@ -1682,7 +2313,7 @@ La hora la pone el servidor. Queda auditado quién lo hizo y el marcaje muestra 
 
 **Quién debe reportes del día**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Empleados activos con reportes pendientes y los días que les faltan, de los últimos 14 días. Solo si la empresa exige el reporte (`meta.required`). Filtra por `employeeId`.
 
@@ -1722,7 +2353,7 @@ Empleados activos con reportes pendientes y los días que les faltan, de los úl
 
 **Reportes del día de los empleados**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Filtra por empleado y día laboral (`from`/`to`, inclusive).
 
@@ -1763,7 +2394,7 @@ Filtra por empleado y día laboral (`from`/`to`, inclusive).
 
 **Exportar los reportes del día a CSV**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Los mismos reportes de `/company/daily-reports` (filtra por empleado y día laboral con `from`/`to`), sin paginar, como archivo CSV (UTF-8). Con más de 5000 reportes hay que acotar el rango.
 
@@ -1793,7 +2424,7 @@ Devuelve un archivo CSV (`text/csv`), no JSON.
 
 **Versiones anteriores de un reporte**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Las más recientes primero. Cada una trae cuándo fue reemplazada.
 
@@ -1821,7 +2452,7 @@ Las más recientes primero. Cada una trae cuándo fue reemplazada.
 
 **Actividad del admin sobre la asistencia**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Quién marcó entrada o salida por un empleado, creó registros manuales, corrigió o anuló registros, y cuándo, con el motivo cuando lo hay. Lo más reciente primero. Filtra por empleado afectado, tipo y rango de instantes (`from` y `to`, UTC o local con desfase).
 
@@ -1863,7 +2494,7 @@ Quién marcó entrada o salida por un empleado, creó registros manuales, corrig
 
 **Resumen del día**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Pantalla de inicio del admin: empleados activos, cuántos están IN y OUT, horas trabajadas hoy por todos (cada empleado en su día local), quiénes alcanzaron su límite diario y cuántos reportes están pendientes. El detalle de pendientes está en `GET /company/daily-reports/pending`.
 
@@ -1883,7 +2514,7 @@ Pantalla de inicio del admin: empleados activos, cuántos están IN y OUT, horas
 
 **Empleados con su estado IN / OUT**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Lista paginada de empleados activos, cada uno con `status` (`in` trabajando, `out` fuera), lo trabajado hoy y su límite diario. Filtra por `status` y busca por nombre, email o código. Para cambiar el estado usa `POST /company/employees/{id}/clock-in` o `/clock-out`.
 
@@ -1923,7 +2554,7 @@ Lista paginada de empleados activos, cada uno con `status` (`in` trabajando, `ou
 
 **Quién está trabajando ahora**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 **Respuesta 200:** En turno
 
@@ -1941,7 +2572,7 @@ Lista paginada de empleados activos, cada uno con `status` (`in` trabajando, `ou
 
 **Hoja de tiempo de un empleado**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Igual que `/me/timesheet`, pero de cualquier empleado de la empresa.
 
@@ -1975,7 +2606,7 @@ Igual que `/me/timesheet`, pero de cualquier empleado de la empresa.
 
 **Crear un registro manual**
 
-**Acceso:** permiso `time_entries.correct` (admin de empresa).
+**Acceso:** permiso `time_entries.correct` (admin de empresa, multi_company_admin).
 
 El admin registra una jornada pasada que nadie marcó, con entrada y salida. Solo de los últimos 14 días, sin horas futuras y sin cruzarse con otro registro del empleado. El motivo es obligatorio y queda auditado; el registro se ve como "admin". Acepta horas en UTC o locales con desfase.
 
@@ -2012,7 +2643,7 @@ El admin registra una jornada pasada que nadie marcó, con entrada y salida. Sol
 
 **Hoja de tiempo de todos los empleados**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Periodo de pago de 14 días con una fila por empleado y una cifra de horas por día (`meta.days` da las fechas en el mismo orden), más los totales de toda la empresa. Incluye a los empleados activos y a los desactivados que trabajaron en el periodo. Solo cuentan los marcajes cerrados. Sin `date` devuelve el periodo actual.
 
@@ -2063,7 +2694,7 @@ Periodo de pago de 14 días con una fila por empleado y una cifra de horas por d
 
 **Estado de un periodo de pago**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Si el periodo está abierto o cerrado, si ya terminó, qué impide cerrarlo (entradas sin salida), cuántos reportes faltan (solo avisa) y el total de horas. `canClose` dice si se puede cerrar ahora. Sin `date` usa el periodo actual.
 
@@ -2090,7 +2721,7 @@ Si el periodo está abierto o cerrado, si ya terminó, qué impide cerrarlo (ent
 
 **Cerrar un periodo de pago**
 
-**Acceso:** permiso `periods.manage` (admin de empresa).
+**Acceso:** permiso `periods.manage` (admin de empresa, multi_company_admin).
 
 **Definitivo:** las horas del periodo quedan congeladas y no hay forma de reabrirlo. Después no se puede corregir, crear ni anular ningún registro de esos días (409 `PERIOD_CLOSED`); los reportes del día sí se siguen escribiendo. Solo se cierra un periodo que ya terminó y sin entradas abiertas. Los reportes pendientes no lo impiden. Queda guardado el total de horas al cerrar, quién y cuándo.
 
@@ -2118,7 +2749,7 @@ Si el periodo está abierto o cerrado, si ya terminó, qué impide cerrarlo (ent
 
 **Exportar la hoja de tiempo a CSV**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 La misma tabla de `/company/timesheet`, de todos los empleados y sin paginar, como archivo CSV (UTF-8, horas con 2 decimales).
 
@@ -2146,7 +2777,7 @@ Devuelve un archivo CSV (`text/csv`), no JSON.
 
 **Registros de asistencia de la empresa**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 Filtra por empleado, día laboral (`from`/`to`) y estado. Cada empleado se agrupa en sus días locales aunque estén en zonas horarias distintas.
 
@@ -2189,7 +2820,7 @@ Filtra por empleado, día laboral (`from`/`to`) y estado. Cada empleado se agrup
 
 **Detalle de un registro**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 **Parámetros de la ruta:**
 
@@ -2215,7 +2846,7 @@ Filtra por empleado, día laboral (`from`/`to`) y estado. Cada empleado se agrup
 
 **Corregir un registro**
 
-**Acceso:** permiso `time_entries.correct` (admin de empresa).
+**Acceso:** permiso `time_entries.correct` (admin de empresa, multi_company_admin).
 
 Cambia la entrada y/o la salida (también sirve para cerrar una entrada olvidada). El motivo es obligatorio; el valor anterior queda guardado y el empleado ve que fue corregido. Acepta horas en UTC o locales con desfase.
 
@@ -2252,7 +2883,7 @@ Cambia la entrada y/o la salida (también sirve para cerrar una entrada olvidada
 
 **Anular un registro**
 
-**Acceso:** permiso `time_entries.correct` (admin de empresa).
+**Acceso:** permiso `time_entries.correct` (admin de empresa, multi_company_admin).
 
 Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendientes, cruces y estado IN/OUT. No se borra: queda con quién lo anuló, cuándo y por qué, y el admin lo ve con `status: voided` (lista con `status=voided`). El empleado ya no lo ve. No se puede deshacer: si fue un error, se crea de nuevo con el registro manual. Si estaba abierto, el empleado queda libre para marcar entrada.
 
@@ -2287,7 +2918,7 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 
 **Historial de correcciones de un registro**
 
-**Acceso:** permiso `attendance.read_all` (admin de empresa).
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
 
 **Parámetros de la ruta:**
 
@@ -2315,14 +2946,15 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `ACCOUNT_LOCKED` | 429 | `PATCH /auth/me/password` |
 | `ALREADY_CLOCKED_IN` | 409 | `POST /me/clock-in` |
 | `COMPANY_ADMIN_NOT_FOUND` | 404 | `POST /platform/companies/{id}/admin/reset-password` |
-| `COMPANY_NOT_FOUND` | 404 | 4 endpoints |
-| `COMPANY_SUSPENDED` | 403 | 51 endpoints |
+| `COMPANY_ALREADY_ASSIGNED` | 409 | `POST /platform/multi-admins/{id}/companies` |
+| `COMPANY_NOT_FOUND` | 404 | 12 endpoints |
+| `COMPANY_SUSPENDED` | 403 | 68 endpoints |
 | `DAILY_LIMIT_REACHED` | 409 | `POST /me/clock-in`, `POST /company/employees/{id}/clock-in` |
 | `DAILY_REPORT_LOCKED` | 409 | `PUT /me/daily-reports/{date}` |
 | `DAILY_REPORT_NOT_FOUND` | 404 | `GET /company/daily-reports/{id}/revisions` |
 | `DAILY_REPORT_PENDING` | 409 | `POST /me/clock-in` |
 | `DAILY_REPORT_REQUIRED` | 400 | `POST /me/clock-out` |
-| `EMAIL_TAKEN` | 409 | `POST /platform/companies`, `POST /company/employees` |
+| `EMAIL_TAKEN` | 409 | 4 endpoints |
 | `EMPLOYEE_ALREADY_CLOCKED_IN` | 409 | `POST /company/employees/{id}/clock-in` |
 | `EMPLOYEE_HAS_HISTORY` | 409 | `DELETE /company/employees/{id}` |
 | `EMPLOYEE_INACTIVE` | 409 | `POST /company/employees/{id}/clock-in` |
@@ -2331,29 +2963,34 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `EMPLOYEE_NOT_FOUND` | 404 | 15 endpoints |
 | `EMPLOYEE_PROFILE_NOT_FOUND` | 404 | 8 endpoints |
 | `ERROR` | 503 | `GET /health` |
-| `EXPORT_TOO_LARGE` | 400 | `GET /company/daily-reports/export` |
-| `FORBIDDEN` | 403 | 45 endpoints |
-| `INVALID_COMPANY_NAME` | 400 | `POST /platform/companies`, `PATCH /platform/companies/{id}`, `PATCH /company` |
+| `EXPORT_TOO_LARGE` | 400 | `GET /company/daily-reports/export`, `GET /portfolio/daily-reports/export` |
+| `FORBIDDEN` | 403 | 62 endpoints |
+| `INVALID_COMPANY_NAME` | 400 | 4 endpoints |
 | `INVALID_CREDENTIALS` | 401 | `POST /auth/login` |
 | `INVALID_CURRENT_PASSWORD` | 400 | `PATCH /auth/me/password` |
 | `INVALID_DAILY_REPORT` | 400 | `POST /me/clock-out`, `PUT /me/daily-reports/{date}` |
-| `INVALID_DATE_RANGE` | 400 | 6 endpoints |
-| `INVALID_JSON` | 400 | 19 endpoints |
-| `INVALID_MAX_EMPLOYEES` | 400 | `POST /platform/companies`, `PATCH /platform/companies/{id}` |
+| `INVALID_DATE_RANGE` | 400 | 8 endpoints |
+| `INVALID_JSON` | 400 | 25 endpoints |
+| `INVALID_MAX_COMPANIES` | 400 | `POST /platform/multi-admins`, `PATCH /platform/multi-admins/{id}` |
+| `INVALID_MAX_EMPLOYEES` | 400 | 4 endpoints |
 | `INVALID_PHONE` | 400 | `POST /company/employees`, `PATCH /company/employees/{id}` |
 | `INVALID_REASON` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
 | `INVALID_REFRESH_TOKEN` | 401 | `POST /auth/refresh` |
 | `INVALID_REPORT_DATE` | 400 | `PUT /me/daily-reports/{date}` |
 | `INVALID_TIME_RANGE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
-| `INVALID_TIMEZONE` | 400 | 5 endpoints |
-| `INVALID_TOKEN` | 401 | 49 endpoints |
+| `INVALID_TIMEZONE` | 400 | 6 endpoints |
+| `INVALID_TOKEN` | 401 | 66 endpoints |
 | `MANUAL_ENTRY_TOO_OLD` | 400 | `POST /company/employees/{id}/time-entries` |
+| `MAX_COMPANIES_BELOW_ASSIGNED` | 409 | `PATCH /platform/multi-admins/{id}` |
+| `MAX_COMPANIES_REACHED` | 409 | `POST /platform/multi-admins/{id}/companies`, `POST /portfolio/companies` |
 | `MAX_EMPLOYEES_BELOW_ACTIVE` | 409 | `PATCH /platform/companies/{id}` |
-| `MISSING_TOKEN` | 401 | 49 endpoints |
+| `MEMBERSHIP_NOT_FOUND` | 404 | `DELETE /platform/multi-admins/{id}/companies/{companyId}` |
+| `MISSING_TOKEN` | 401 | 66 endpoints |
+| `MULTI_ADMIN_NOT_FOUND` | 404 | 6 endpoints |
 | `NO_CHANGES` | 400 | `PATCH /company/time-entries/{id}` |
 | `NO_WORK_ON_DATE` | 400 | `PUT /me/daily-reports/{date}` |
 | `NOT_CLOCKED_IN` | 409 | `POST /me/clock-out` |
-| `PASSWORD_CHANGE_REQUIRED` | 403 | 46 endpoints |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | 63 endpoints |
 | `PASSWORD_REUSED` | 400 | `PATCH /auth/me/password` |
 | `PERIOD_ALREADY_CLOSED` | 409 | `POST /company/periods/close` |
 | `PERIOD_CLOSED` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
@@ -2362,16 +2999,16 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `REFRESH_TOKEN_EXPIRED` | 401 | `POST /auth/refresh` |
 | `REPORT_DATE_TOO_OLD` | 400 | `PUT /me/daily-reports/{date}` |
 | `SESSION_MAX_AGE_REACHED` | 401 | `POST /auth/refresh` |
-| `SESSION_REVOKED` | 401 | 49 endpoints |
+| `SESSION_REVOKED` | 401 | 66 endpoints |
 | `TEMPORARY_PASSWORD_EXPIRED` | 403 | `POST /auth/login` |
 | `TIME_ENTRY_CHANGED` | 409 | `PATCH /company/time-entries/{id}` |
 | `TIME_ENTRY_NOT_FOUND` | 404 | 4 endpoints |
 | `TIME_ENTRY_OVERLAP` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `TIME_ENTRY_VOIDED` | 409 | `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
 | `TIME_IN_FUTURE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
-| `TOKEN_EXPIRED` | 401 | 49 endpoints |
-| `USER_INACTIVE` | 403 | 51 endpoints |
-| `VALIDATION_ERROR` | 400 | 44 endpoints |
+| `TOKEN_EXPIRED` | 401 | 66 endpoints |
+| `USER_INACTIVE` | 403 | 68 endpoints |
+| `VALIDATION_ERROR` | 400 | 60 endpoints |
 | `WEAK_PASSWORD` | 400 | `PATCH /auth/me/password` |
 
 Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `TOO_MANY_REQUESTS` (429) e `INTERNAL_ERROR` (500).
@@ -2384,6 +3021,13 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `overrideDailyLimit` | booleano | no | true autoriza trabajar por encima del límite diario (horas extra): si el empleado ya lo alcanzó se le marca entrada igual y esa entrada no se cierra sola. Con false se respeta el límite (por defecto `false`) |
+
+<a id="schema-assigncompanyrequest"></a>
+#### AssignCompanyRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) | sí | — |
 
 <a id="schema-attendanceactivity"></a>
 #### AttendanceActivity
@@ -2474,6 +3118,13 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 
 <a id="schema-changeemployeestatusrequest"></a>
 #### ChangeEmployeeStatusRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `status` | `active` \| `inactive` | sí | — |
+
+<a id="schema-changemultiadminstatusrequest"></a>
+#### ChangeMultiAdminStatusRequest
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
@@ -2635,6 +3286,38 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `clockOutAt` | fecha y hora ISO 8601 | sí | (ej. `"2026-06-01T08:00:00-06:00"`) |
 | `reason` | texto | sí | (5 a 500 caracteres; ej. `"Olvidó marcar; confirmado con su supervisor"`) |
 
+<a id="schema-createmultiadminrequest"></a>
+#### CreateMultiAdminRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `email` | texto | sí | (ej. `"ana@empresa.com"`) |
+| `firstName` | texto | sí | (1 a 100 caracteres; ej. `"Laura"`) |
+| `lastName` | texto | sí | (1 a 100 caracteres; ej. `"Gómez"`) |
+| `maxCompanies` | entero | sí | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
+| `maxEmployeesPerCompany` | entero | sí | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
+
+<a id="schema-createmultiadminresponse"></a>
+#### CreateMultiAdminResponse
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `multiAdmin` | [MultiAdmin](#schema-multiadmin) | sí | — |
+| `temporaryPassword` | texto | sí | Contraseña temporal. Se muestra UNA sola vez; entrégala de forma segura. |
+| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-createowncompanyrequest"></a>
+#### CreateOwnCompanyRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | sí | (2 a 150 caracteres; ej. `"Sucursal Norte"`) |
+| `timezone` | texto | no | Zona horaria IANA. Si se omite se usa America/Denver. (1 a 64 caracteres) |
+| `admin` | objeto | sí | El admin de la nueva empresa. Recibe una contraseña temporal. |
+| `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
+| `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
+| `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+
 <a id="schema-currentuser"></a>
 #### CurrentUser
 
@@ -2644,7 +3327,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `email` | texto (email) | sí | — |
 | `firstName` | texto | sí | — |
 | `lastName` | texto | sí | — |
-| `role` | `platform_admin` \| `company_admin` \| `employee` | sí | — |
+| `role` | `platform_admin` \| `company_admin` \| `multi_company_admin` \| `employee` | sí | — |
 | `mustChangePassword` | booleano | sí | — |
 | `company` | objeto o null | sí | — |
 | `company.id` | texto (uuid) | sí | — |
@@ -2652,7 +3335,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `company.name` | texto | sí | — |
 | `company.timezone` | texto | sí | — |
 | `employee` | objeto o null | sí | — |
-| `permissions` | (`companies.manage` \| `company.settings.manage` \| `employees.manage` \| `attendance.read_all` \| `time_entries.correct` \| `attendance.clock_employees` \| `periods.manage` \| `attendance.clock_own` \| `attendance.read_own`)[] | sí | — |
+| `permissions` | (`companies.manage` \| `multi_admins.manage` \| `portfolio.read` \| `portfolio.companies.create` \| `company.settings.manage` \| `employees.manage` \| `attendance.read_all` \| `time_entries.correct` \| `attendance.clock_employees` \| `periods.manage` \| `attendance.clock_own` \| `attendance.read_own`)[] | sí | — |
 
 <a id="schema-dailyreport"></a>
 #### DailyReport
@@ -2751,6 +3434,41 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `refreshTokenExpiresAt` | fecha y hora ISO 8601 | sí | — |
 | `user` | [CurrentUser](#schema-currentuser) | sí | — |
 
+<a id="schema-multiadmin"></a>
+#### MultiAdmin
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `email` | texto (email) | sí | — |
+| `firstName` | texto | sí | — |
+| `lastName` | texto | sí | — |
+| `status` | `active` \| `inactive` | sí | — |
+| `lastLoginAt` | fecha y hora ISO 8601 o null | sí | — |
+| `maxCompanies` | entero | sí | — |
+| `maxEmployeesPerCompany` | entero | sí | — |
+| `companyCount` | entero | sí | Empresas que tiene hoy |
+| `createdAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-multiadmindetail"></a>
+#### MultiAdminDetail
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `multiAdmin` | [MultiAdmin](#schema-multiadmin) | sí | — |
+| `companies` | [Company](#schema-company)[] | sí | — |
+
+<a id="schema-mycompanies"></a>
+#### MyCompanies
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `limits` | objeto | sí | — |
+| `limits.maxCompanies` | entero | sí | — |
+| `limits.maxEmployeesPerCompany` | entero | sí | — |
+| `limits.usedCompanies` | entero | sí | — |
+| `companies` | [Company](#schema-company)[] | sí | — |
+
 <a id="schema-mydailyreport"></a>
 #### MyDailyReport
 
@@ -2845,6 +3563,120 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `closedBy.firstName` | texto | sí | — |
 | `closedBy.lastName` | texto | sí | — |
 
+<a id="schema-portfoliodailyreport"></a>
+#### PortfolioDailyReport
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `company` | objeto | sí | — |
+| `company.id` | texto (uuid) | sí | — |
+| `company.name` | texto | sí | — |
+| `company.code` | texto | sí | — |
+| `employee` | objeto | sí | — |
+| `employee.id` | texto (uuid) | sí | — |
+| `employee.firstName` | texto | sí | — |
+| `employee.lastName` | texto | sí | — |
+| `employee.employeeCode` | texto o null | sí | — |
+| `workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
+| `content` | texto | sí | Texto del reporte en Markdown |
+| `revisions` | entero | sí | — |
+| `createdAt` | fecha y hora ISO 8601 | sí | — |
+| `updatedAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-portfolioemployee"></a>
+#### PortfolioEmployee
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `userId` | texto (uuid) | sí | — |
+| `email` | texto (email) | sí | — |
+| `firstName` | texto | sí | — |
+| `lastName` | texto | sí | — |
+| `employeeCode` | texto | sí | Lo asigna el sistema al dar de alta: letras de la empresa y consecutivo. No cambia ni se reutiliza (ej. `"KCS-0001"`) |
+| `phone` | texto o null | sí | — |
+| `hiredAt` | fecha AAAA-MM-DD o null | sí | — |
+| `timezone` | texto o null | sí | Zona propia; null = hereda. |
+| `effectiveTimezone` | texto | sí | Zona que realmente aplica. |
+| `dailyLimitMinutes` | entero o null | sí | Propio; null = hereda. |
+| `effectiveDailyLimitMinutes` | entero o null | sí | Límite que realmente aplica; null = sin límite. |
+| `status` | `active` \| `inactive` | sí | — |
+| `mustChangePassword` | booleano | sí | — |
+| `lastLoginAt` | fecha y hora ISO 8601 o null | sí | — |
+| `createdAt` | fecha y hora ISO 8601 | sí | — |
+| `updatedAt` | fecha y hora ISO 8601 | sí | — |
+| `company` | objeto | sí | — |
+| `company.id` | texto (uuid) | sí | — |
+| `company.name` | texto | sí | — |
+| `company.code` | texto | sí | — |
+
+<a id="schema-portfoliosummary"></a>
+#### PortfolioSummary
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `asOf` | fecha y hora ISO 8601 | sí | — |
+| `period` | objeto | sí | Periodo de pago actual. No avanza hasta que todas las empresas terminaron el anterior |
+| `period.start` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
+| `period.end` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
+| `days` | objeto[] | sí | — |
+| `days[].date` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
+| `days[].weekday` | `monday` \| `tuesday` \| `wednesday` \| `thursday` \| `friday` \| `saturday` \| `sunday` | sí | — |
+| `totals` | objeto | sí | — |
+| `totals.companies` | entero | sí | Empresas activas incluidas |
+| `totals.employees` | objeto | sí | — |
+| `totals.employees.active` | entero | sí | — |
+| `totals.employees.in` | entero | sí | Trabajando ahora |
+| `totals.employees.out` | entero | sí | — |
+| `totals.worked` | objeto | sí | Trabajado hoy por todos, incluidas las entradas abiertas |
+| `totals.worked.seconds` | entero | sí | — |
+| `totals.worked.hours` | número | sí | — |
+| `totals.atLimitCount` | entero | sí | — |
+| `totals.pendingReports` | objeto | sí | — |
+| `totals.pendingReports.employees` | entero | sí | Empleados con reportes pendientes |
+| `totals.pendingReports.days` | entero | sí | Reportes pendientes en total |
+| `totals.pendingReports.companiesRequiring` | entero | sí | Empresas que exigen reporte diario |
+| `totals.periodHours` | número | sí | Horas de todos en el periodo actual |
+| `totals.dailyHours` | número[] | sí | Horas de todos por día del periodo, en el orden de `days` |
+| `companies` | objeto[] | sí | — |
+| `companies[].company` | objeto | sí | — |
+| `companies[].company.id` | texto (uuid) | sí | — |
+| `companies[].company.name` | texto | sí | — |
+| `companies[].company.code` | texto | sí | — |
+| `companies[].employees` | objeto | sí | — |
+| `companies[].employees.active` | entero | sí | — |
+| `companies[].employees.in` | entero | sí | Trabajando ahora |
+| `companies[].employees.out` | entero | sí | — |
+| `companies[].worked` | objeto | sí | — |
+| `companies[].worked.seconds` | entero | sí | — |
+| `companies[].worked.hours` | número | sí | — |
+| `companies[].atLimitCount` | entero | sí | — |
+| `companies[].pendingReports` | objeto | sí | — |
+| `companies[].pendingReports.employees` | entero | sí | Empleados con reportes pendientes |
+| `companies[].pendingReports.days` | entero | sí | Reportes pendientes en total |
+| `companies[].pendingReports.required` | booleano | sí | — |
+| `companies[].periodHours` | número | sí | — |
+
+<a id="schema-portfoliotimesheetrow"></a>
+#### PortfolioTimesheetRow
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `company` | objeto | sí | — |
+| `company.id` | texto (uuid) | sí | — |
+| `company.name` | texto | sí | — |
+| `company.code` | texto | sí | — |
+| `employee` | objeto | sí | — |
+| `employee.id` | texto (uuid) | sí | — |
+| `employee.firstName` | texto | sí | — |
+| `employee.lastName` | texto | sí | — |
+| `employee.employeeCode` | texto o null | sí | — |
+| `employee.active` | booleano | sí | — |
+| `hours` | número[] | sí | Horas decimales de cada día del periodo, en el mismo orden que meta.days |
+| `totalHours` | número | sí | — |
+| `openEntries` | entero | sí | — |
+
 <a id="schema-refreshrequest"></a>
 #### RefreshRequest
 
@@ -2878,6 +3710,13 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `accessTokenExpiresAt` | fecha y hora ISO 8601 | sí | — |
 | `refreshToken` | texto | sí | Guárdalo de forma segura. Cada uso devuelve uno nuevo y anula el anterior. |
 | `refreshTokenExpiresAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-switchcompanyrequest"></a>
+#### SwitchCompanyRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) o null | sí | Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, para ver el resumen de todas tus empresas. |
 
 <a id="schema-timeentry"></a>
 #### TimeEntry
@@ -2981,6 +3820,16 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `hiredAt` | fecha AAAA-MM-DD o null | no | (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
 | `dailyLimitMinutes` | entero o null | no | Límite diario propio de este empleado. `null` = usa el de la empresa. Tiene prioridad sobre el de la empresa. (de 1 a 1440; ej. `490`) |
+
+<a id="schema-updatemultiadminrequest"></a>
+#### UpdateMultiAdminRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `firstName` | texto | no | (1 a 100 caracteres) |
+| `lastName` | texto | no | (1 a 100 caracteres) |
+| `maxCompanies` | entero | no | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
+| `maxEmployeesPerCompany` | entero | no | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
 
 <a id="schema-updateprofilerequest"></a>
 #### UpdateProfileRequest

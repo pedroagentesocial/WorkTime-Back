@@ -19,6 +19,10 @@ import { UpdateEmployeeUseCase } from './application/update-employee.use-case.js
 import { PrismaCompanySettingsRepository } from './infrastructure/prisma-company-settings.repository.js';
 import { PrismaEmployeeRepository } from './infrastructure/prisma-employee.repository.js';
 import { workforceRoutes } from './presentation/workforce.routes.js';
+import { ListPortfolioEmployeesUseCase } from './application/list-portfolio-employees.use-case.js';
+import type { PortfolioEmployeeReader } from './application/ports/portfolio-employee.reader.js';
+import { PrismaPortfolioEmployeeReader } from './infrastructure/prisma-portfolio-employee.reader.js';
+import { portfolioEmployeeRoutes } from './presentation/portfolio.routes.js';
 
 declare module '#shared/composition/container.js' {
   interface Cradle {
@@ -34,6 +38,8 @@ declare module '#shared/composition/container.js' {
     resetEmployeePassword: ResetEmployeePasswordUseCase;
     revokeEmployeeSessions: RevokeEmployeeSessionsUseCase;
     deleteEmployee: DeleteEmployeeUseCase;
+    portfolioEmployeeReader: PortfolioEmployeeReader;
+    listPortfolioEmployees: ListPortfolioEmployeesUseCase;
   }
 }
 
@@ -54,8 +60,13 @@ export const workforceModule: AppModule = {
       resetEmployeePassword: asClass(ResetEmployeePasswordUseCase).singleton(),
       revokeEmployeeSessions: asClass(RevokeEmployeeSessionsUseCase).singleton(),
       deleteEmployee: asClass(DeleteEmployeeUseCase).singleton(),
+      portfolioEmployeeReader: asClass(PrismaPortfolioEmployeeReader).singleton(),
+      listPortfolioEmployees: asClass(ListPortfolioEmployeesUseCase).singleton(),
     });
   },
 
-  routes: (container) => workforceRoutes(container.cradle),
+  routes: (container) => [
+    ...workforceRoutes(container.cradle),
+    ...portfolioEmployeeRoutes(container.cradle),
+  ],
 };

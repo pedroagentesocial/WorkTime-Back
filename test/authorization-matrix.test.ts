@@ -5,8 +5,14 @@ import { modules } from '#modules/index.js';
 import { hasPermission, Role } from '#shared/domain/permissions.js';
 import type { AnyRoute } from '#shared/http/route.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
-import { api, bearer, createTestApp, login } from './helpers/test-app.js';
+import {
+  createCompany,
+  createEmployee,
+  createMultiAdmin,
+  createUser,
+  DEFAULT_PASSWORD,
+} from './helpers/fixtures.js';
+import { api, bearer, createTestApp, login, switchCompany } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
 const { app, container } = createTestApp();
@@ -32,9 +38,11 @@ beforeAll(async () => {
   const platform = await createUser(prisma, { role: Role.PLATFORM_ADMIN });
   const admin = await createUser(prisma, { role: Role.COMPANY_ADMIN, companyId: company.id });
   const { user: employee } = await createEmployee(prisma, company.id);
+  const multi = await createMultiAdmin(prisma, { companyIds: [company.id] });
 
   emails[Role.PLATFORM_ADMIN] = platform.email;
   emails[Role.COMPANY_ADMIN] = admin.email;
+  emails[Role.MULTI_COMPANY_ADMIN] = multi.email;
   emails[Role.EMPLOYEE] = employee.email;
 
   tokens[Role.PLATFORM_ADMIN] = bearer(
@@ -42,6 +50,11 @@ beforeAll(async () => {
   );
   tokens[Role.COMPANY_ADMIN] = bearer(
     (await login(app, admin.email, DEFAULT_PASSWORD)).accessToken,
+  );
+  // Con empresa activa, para que las rutas de empresa respondan como a un admin de empresa
+  const multiSession = await login(app, multi.email, DEFAULT_PASSWORD);
+  tokens[Role.MULTI_COMPANY_ADMIN] = bearer(
+    (await switchCompany(app, multiSession.accessToken, company.id)).accessToken,
   );
   tokens[Role.EMPLOYEE] = bearer((await login(app, employee.email, DEFAULT_PASSWORD)).accessToken);
 });

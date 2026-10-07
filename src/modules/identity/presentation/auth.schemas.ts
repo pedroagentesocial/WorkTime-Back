@@ -38,6 +38,20 @@ export const updateProfileBody = z
   .strict()
   .openapi('UpdateProfileRequest');
 
+export const switchCompanyBody = z
+  .object({
+    companyId: z
+      .uuid()
+      .or(z.null())
+      .openapi({
+        description:
+          'Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, ' +
+          'para ver el resumen de todas tus empresas.',
+      }),
+  })
+  .strict()
+  .openapi('SwitchCompanyRequest');
+
 export const sessionSchema = z
   .object({
     tokenType: z.literal('Bearer'),

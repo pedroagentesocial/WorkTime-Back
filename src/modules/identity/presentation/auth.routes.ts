@@ -1,3 +1,4 @@
+import { Permission } from '#shared/domain/permissions.js';
 import { defineRoute, noContent, ok, type AnyRoute } from '#shared/http/route.js';
 import { dataResponse } from '#shared/http/schemas.js';
 import type { ChangePasswordUseCase } from '../application/change-password.use-case.js';
@@ -6,6 +7,7 @@ import type { LoginUseCase } from '../application/login.use-case.js';
 import type { LogoutAllUseCase, UpdateProfileUseCase } from '../application/profile.use-cases.js';
 import type { LogoutUseCase } from '../application/logout.use-case.js';
 import type { RefreshSessionUseCase } from '../application/refresh-session.use-case.js';
+import type { SwitchActiveCompanyUseCase } from '../application/switch-active-company.use-case.js';
 import {
   changePasswordBody,
   loginBody,
@@ -14,6 +16,7 @@ import {
   refreshBody,
   updateProfileBody,
   sessionSchema,
+  switchCompanyBody,
   toSessionDto,
 } from './auth.schemas.js';
 
@@ -25,6 +28,7 @@ interface Deps {
   changePassword: ChangePasswordUseCase;
   updateProfile: UpdateProfileUseCase;
   logoutAll: LogoutAllUseCase;
+  switchActiveCompany: SwitchActiveCompanyUseCase;
 }
 
 const TAGS = ['Autenticación'];
@@ -125,6 +129,39 @@ export function authRoutes(deps: Deps): AnyRoute[] {
       },
       handler: async ({ actor, body, request }) =>
         ok(await deps.updateProfile.execute({ actor, client: request, ...body })),
+    }),
+
+    defineRoute({
+      method: 'post',
+      path: '/auth/active-company',
+      summary: 'Elegir la empresa con la que trabajo',
+      description:
+        'Solo para el admin multiempresa. Emite una sesión nueva cuya empresa activa es la elegida; ' +
+        'desde ahí se trabaja como admin de esa empresa. Con `companyId: null` la sesión queda ' +
+        'sin empresa activa. Las sesiones anteriores siguen válidas hasta cerrarlas.',
+      tags: TAGS,
+      auth: Permission.PORTFOLIO_READ,
+      rateLimit: 'sensitive',
+      request: { body: switchCompanyBody },
+      responses: {
+        200: { description: 'Sesión nueva', schema: dataResponse(loginResponseSchema) },
+        403: {
+          description: 'La empresa está suspendida',
+          errorCodes: ['COMPANY_SUSPENDED'],
+        },
+        404: {
+          description: 'La empresa no existe o no está asignada a la cuenta',
+          errorCodes: ['COMPANY_NOT_FOUND'],
+        },
+      },
+      handler: async ({ actor, body, request }) => {
+        const { session, account } = await deps.switchActiveCompany.execute({
+          actor,
+          client: request,
+          companyId: body.companyId,
+        });
+        return ok({ ...toSessionDto(session), user: toProfile(account) });
+      },
     }),
 
     defineRoute({

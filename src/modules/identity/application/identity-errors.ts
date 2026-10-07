@@ -1,5 +1,6 @@
 import {
   ForbiddenError,
+  NotFoundError,
   TooManyRequestsError,
   UnauthorizedError,
   ValidationError,
@@ -39,6 +40,10 @@ export const IdentityErrors = {
 
   passwordReused: () =>
     new ValidationError('PASSWORD_REUSED', 'La nueva contraseña debe ser distinta a la actual'),
+
+  // Una empresa ajena responde igual que una inexistente, como en el resto de la API
+  companyNotAssigned: () =>
+    new NotFoundError('COMPANY_NOT_FOUND', 'La empresa no existe o no está asignada a tu cuenta'),
 
   accountLocked: () =>
     new TooManyRequestsError(

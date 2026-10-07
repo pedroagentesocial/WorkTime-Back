@@ -11,6 +11,7 @@ import type { RefreshTokenRepository } from './application/ports/refresh-token.r
 import type { UserAccountRepository } from './application/ports/user-account.repository.js';
 import { RefreshSessionUseCase } from './application/refresh-session.use-case.js';
 import { SessionIssuer, type SessionSettings } from './application/session-issuer.js';
+import { SwitchActiveCompanyUseCase } from './application/switch-active-company.use-case.js';
 import { TokenAuthenticator } from './application/token-authenticator.js';
 import { LoginLockoutPolicy } from './domain/login-lockout-policy.js';
 import { PasswordPolicy } from './domain/password-policy.js';
@@ -33,6 +34,7 @@ declare module '#shared/composition/container.js' {
     changePassword: ChangePasswordUseCase;
     updateProfile: UpdateProfileUseCase;
     logoutAll: LogoutAllUseCase;
+    switchActiveCompany: SwitchActiveCompanyUseCase;
   }
 }
 
@@ -68,6 +70,7 @@ export const identityModule: AppModule = {
       changePassword: asClass(ChangePasswordUseCase).singleton(),
       updateProfile: asClass(UpdateProfileUseCase).singleton(),
       logoutAll: asClass(LogoutAllUseCase).singleton(),
+      switchActiveCompany: asClass(SwitchActiveCompanyUseCase).singleton(),
 
       authenticator: asClass(TokenAuthenticator).singleton(),
     });

@@ -1,8 +1,14 @@
 import type { UserAccount } from '../../domain/user-account.js';
 
+export interface FindByIdOptions {
+  readonly activeCompanyId?: string | null | undefined;
+}
+
 export interface UserAccountRepository {
   findByEmail(email: string): Promise<UserAccount | null>;
-  findById(id: string): Promise<UserAccount | null>;
+  // Para un admin multiempresa, activeCompanyId es la empresa con la que trabaja la sesion. La cuenta
+  // trae esa empresa solo si la membresia sigue vigente; si no, queda sin empresa
+  findById(id: string, options?: FindByIdOptions): Promise<UserAccount | null>;
 
   reserveLoginAttempt(userId: string, now: Date): Promise<number | null>;
   clearFailedLoginAttempts(userId: string): Promise<void>;

@@ -49,7 +49,9 @@ export class GetCurrentUserUseCase implements UseCase<Actor, CurrentUserProfile>
   constructor(private readonly deps: Deps) {}
 
   async execute(actor: Actor): Promise<CurrentUserProfile> {
-    const account = await this.deps.userAccountRepository.findById(actor.userId);
+    const account = await this.deps.userAccountRepository.findById(actor.userId, {
+      activeCompanyId: actor.companyId,
+    });
     if (!account) throw IdentityErrors.sessionRevoked();
     return toProfile(account);
   }

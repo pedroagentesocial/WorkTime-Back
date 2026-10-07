@@ -26,13 +26,14 @@ API de control de asistencia multiempresa. Este documento explica **cómo funcio
 
 **Empresas.** El sistema es multiempresa. Cada empresa tiene su propio administrador y sus empleados, y **nunca ve datos de otra**. La empresa se identifica por su `id` (UUID) y por un **código** legible como `K7QF-29MX`, pensado para soporte (por ejemplo, si alguien pide por correo restablecer una contraseña). El código **identifica, no autentica**: no es un secreto.
 
-**Roles.** Hay tres:
+**Roles.** Hay cuatro:
 
-| Rol                                | Qué hace                                                                                                   |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `platform_admin` (admin global)    | Crea, edita y suspende empresas. No pertenece a ninguna.                                                   |
-| `company_admin` (admin de empresa) | Uno por empresa. Gestiona empleados, ve y corrige la asistencia, cierra periodos. **No marca asistencia.** |
-| `employee` (empleado)              | Marca entrada y salida, escribe su reporte diario y consulta su historial.                                 |
+| Rol                                        | Qué hace                                                                                                                                             |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `platform_admin` (admin global)            | Crea, edita y suspende empresas. No pertenece a ninguna.                                                                                             |
+| `company_admin` (admin de empresa)         | Uno por empresa. Gestiona empleados, ve y corrige la asistencia, cierra periodos. **No marca asistencia.**                                           |
+| `multi_company_admin` (admin multiempresa) | Una persona que administra **varias empresas**, solo las que el admin global le asigna o las que crea dentro de su paquete. Trabaja en una a la vez. |
+| `employee` (empleado)                      | Marca entrada y salida, escribe su reporte diario y consulta su historial.                                                                           |
 
 **Marcajes (`time entries`).** Un marcaje es una jornada con entrada y salida. Un empleado puede tener **varios por día** (por ejemplo, salir a comer y volver a entrar), pero **solo uno abierto a la vez**. No hay "pausas": una pausa es una salida y una entrada.
 
@@ -338,21 +339,26 @@ const { data: status } = await client.request('GET', '/me/clock-status');
 
 Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de permisos:
 
-| Permiso                      | Admin global | Admin de empresa | Empleado |
-| ---------------------------- | :----------: | :--------------: | :------: |
-| `companies.manage`           |      sí      |                  |          |
-| `company.settings.manage`    |              |        sí        |          |
-| `employees.manage`           |              |        sí        |          |
-| `attendance.read_all`        |              |        sí        |          |
-| `time_entries.correct`       |              |        sí        |          |
-| `attendance.clock_employees` |              |        sí        |          |
-| `periods.manage`             |              |        sí        |          |
-| `attendance.clock_own`       |              |                  |    sí    |
-| `attendance.read_own`        |              |                  |    sí    |
+| Permiso                      | Admin global | Admin de empresa | Admin multiempresa | Empleado |
+| ---------------------------- | :----------: | :--------------: | :----------------: | :------: |
+| `companies.manage`           |      sí      |                  |                    |          |
+| `multi_admins.manage`        |      sí      |                  |                    |          |
+| `portfolio.read`             |              |                  |         sí         |          |
+| `portfolio.companies.create` |              |                  |         sí         |          |
+| `company.settings.manage`    |              |        sí        |         sí         |          |
+| `employees.manage`           |              |        sí        |         sí         |          |
+| `attendance.read_all`        |              |        sí        |         sí         |          |
+| `time_entries.correct`       |              |        sí        |         sí         |          |
+| `attendance.clock_employees` |              |        sí        |         sí         |          |
+| `periods.manage`             |              |        sí        |         sí         |          |
+| `attendance.clock_own`       |              |                  |                    |    sí    |
+| `attendance.read_own`        |              |                  |                    |    sí    |
 
 `GET /auth/me` devuelve la lista de `permissions` del usuario: sirve para decidir qué pantallas y botones mostrar. Un usuario que intenta usar un endpoint sin el permiso recibe `403 FORBIDDEN`.
 
 **Aislamiento entre empresas.** La empresa **sale siempre del token**, nunca de lo que mande el cliente. Un recurso de otra empresa responde `404`, igual que uno que no existe.
+
+**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una y recibe una sesión nueva cuya empresa activa es esa. Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
 
 ---
 
@@ -529,6 +535,34 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 ---
 
+### Administradores multiempresa
+
+- `POST /platform/multi-admins` crea a la persona con su **paquete**: `maxCompanies` (cuántas empresas puede tener) y `maxEmployeesPerCompany` (empleados máximos de cada empresa que cree). Devuelve su **contraseña temporal una sola vez**.
+- `GET /platform/multi-admins` lista, con `search` y `status`. `GET /platform/multi-admins/{id}` muestra a la persona con sus empresas.
+- `PATCH /platform/multi-admins/{id}` cambia nombre y paquete. El máximo de empresas no puede quedar por debajo de las que ya tiene (`409 MAX_COMPANIES_BELOW_ASSIGNED`).
+- `PATCH /platform/multi-admins/{id}/status` la desactiva o reactiva. Al desactivarla pierde el acceso al instante.
+- `POST /platform/multi-admins/{id}/reset-password` genera una contraseña temporal y cierra sus sesiones.
+- `POST /platform/multi-admins/{id}/companies` le asigna una empresa **que ya existe** (`409 MAX_COMPANIES_REACHED` si ya llegó a su máximo) y `DELETE /platform/multi-admins/{id}/companies/{companyId}` se la quita. Quitar una empresa no toca la empresa ni sus datos.
+
+Paquetes: una empresa con su admin de empresa es el paquete de una empresa. Para varias empresas se crea un admin multiempresa con el máximo que corresponda. Una empresa siempre nace con su admin de empresa, y esa persona convive con el admin multiempresa.
+
+### Pantallas del admin multiempresa
+
+- `GET /portfolio/companies` devuelve sus empresas (por nombre) y lo que le queda de su paquete. Sirve para el selector de empresa.
+- `POST /portfolio/companies` crea una empresa con su admin dentro de su paquete. La empresa nace con `maxEmployeesPerCompany` empleados de máximo y queda asignada a la persona. `409 MAX_COMPANIES_REACHED` si ya llegó a su máximo. Devuelve la contraseña temporal del admin de la empresa una sola vez.
+- `POST /auth/active-company` elige la empresa con la que trabaja (ver sección 5).
+
+**Vistas de todas sus empresas** (solo lectura, no dependen de la empresa activa de la sesión; solo cuentan sus empresas **activas**, las suspendidas quedan fuera):
+
+- `GET /portfolio/summary` es su panel: empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y reportes pendientes, en total y por empresa, más las horas de todos por día del periodo. El periodo no avanza hasta que todas sus empresas terminaron el anterior.
+- `GET /portfolio/employees` lista los empleados de todas sus empresas, con la empresa de cada uno. Filtra por `search`, `status` y `companyId`.
+- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila.
+- `GET /portfolio/daily-reports` lista los reportes de todas sus empresas y `GET /portfolio/daily-reports/export` los baja en CSV, también con la empresa. Con más de 5000 reportes hay que acotar el rango.
+- Todas aceptan `companyId` para acotar a una empresa; una que no es suya responde `404 COMPANY_NOT_FOUND`, igual que una inexistente o suspendida.
+- No puede cambiar el límite de empleados de una empresa, suspenderla ni cambiar su propio paquete: eso es solo del admin global.
+
+---
+
 ## 10. Qué hacer ante cada error
 
 Decide por `error.code`, no por el texto. Los casos más importantes:
@@ -544,6 +578,7 @@ Decide por `error.code`, no por el texto. Los casos más importantes:
 | `USER_INACTIVE`, `COMPANY_SUSPENDED`                                        | 403  | Mostrar que no tiene acceso; no insistir.                                                              |
 | `TEMPORARY_PASSWORD_EXPIRED`                                                | 403  | Pedir al admin una contraseña temporal nueva.                                                          |
 | `FORBIDDEN`                                                                 | 403  | El usuario no tiene el permiso. Revisa los `permissions` de `/auth/me`.                                |
+| `COMPANY_REQUIRED`                                                          | 403  | Es un admin multiempresa sin empresa activa: pedirle que elija una (`POST /auth/active-company`).      |
 | `VALIDATION_ERROR`                                                          | 400  | Mostrar los mensajes de `error.details` junto a cada campo (`path`).                                   |
 | `DAILY_REPORT_PENDING`                                                      | 409  | Mostrar `error.details.dates` y dejar escribir los reportes.                                           |
 | `DAILY_REPORT_REQUIRED`                                                     | 400  | Pedir el reporte antes de marcar la salida.                                                            |

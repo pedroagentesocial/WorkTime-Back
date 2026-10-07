@@ -18,6 +18,8 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 - JWT HS256 de 15 min con algoritmo fijado, `iss`/`aud`/`exp` obligatorios.
 - En cada petición se verifica en la BD: usuario activo, empresa activa, `tokenVersion`, rol y empresa.
 - Refresh tokens opacos, guardados como SHA-256, rotativos, con detección de reuso (revoca la sesión entera), ligados a `tokenVersion` y con duración máxima absoluta de 30 días.
+- Admin multiempresa: la empresa activa va en el token y se valida contra `company_memberships` en cada petición (y al renovar la sesión); sin membresía vigente o con la empresa suspendida la sesión muere al instante. Una empresa ajena responde 404 igual que una inexistente. Los límites del paquete se deciden con la fila de límites bloqueada (`FOR UPDATE`), así dos altas a la vez no pasan del máximo, y las acciones sobre membresías y paquetes se auditan dentro de la transacción (`recordOrThrow`).
+- Vistas consolidadas del admin multiempresa: la lista de empresas sale siempre de `company_memberships` (solo activas) vía `PortfolioScope`; el `companyId` del cliente solo filtra dentro de esa lista y una empresa ajena responde 404. Son de solo lectura y los CSV neutralizan fórmulas como el resto.
 - Bloqueo tras 3 intentos fallidos: 30 s, duplicándose en cada reincidencia hasta 15 min (`users.lock_level`, se reinicia al entrar bien o tras 15 min sin reincidir), con reserva atómica del intento: ni con ráfagas en paralelo se prueban más contraseñas.
 - Login sin enumeración: mismo mensaje y trabajo equivalente para email inexistente, contraseña incorrecta o cuenta bloqueada.
 - Contraseñas temporales aleatorias (CSPRNG), vencen en 72 h, obligan a cambiarse y no sirven para renovar sesión una vez vencidas.

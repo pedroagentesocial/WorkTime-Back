@@ -47,6 +47,23 @@ export interface CompanyTimesheetPage extends CompanyTimesheetResult {
   readonly total: number;
 }
 
+type TimesheetBodyDeps = Pick<Deps, 'timeEntryRepository' | 'employeeDirectory'>;
+
+// Filas y totales de una empresa en un periodo; lo comparten la hoja de la empresa y las vistas consolidadas
+export async function timesheetBodyOf(
+  deps: TimesheetBodyDeps,
+  companyId: string,
+  period: PayPeriod,
+  search?: string,
+): Promise<CompanyTimesheet> {
+  const range = { from: period.start, to: period.end };
+  const [employees, totals] = await Promise.all([
+    deps.employeeDirectory.listForTimesheet(companyId, range, search),
+    deps.timeEntryRepository.periodTotals(companyId, range),
+  ]);
+  return buildCompanyTimesheet(period, employees, totals);
+}
+
 async function timesheetOf(
   deps: Deps,
   { actor, date, search }: CompanyTimesheetInput,
@@ -54,16 +71,14 @@ async function timesheetOf(
   const companyId = companyIdOf(actor);
   const timezone = (await deps.employeeDirectory.companyTimezone(companyId)) ?? 'UTC';
   const period = payPeriodOf(date ?? localDateOf(deps.clock.now(), timezone));
-  const range = { from: period.start, to: period.end };
 
-  const [employees, totals, closure] = await Promise.all([
-    deps.employeeDirectory.listForTimesheet(companyId, range, search),
-    deps.timeEntryRepository.periodTotals(companyId, range),
+  const [body, closure] = await Promise.all([
+    timesheetBodyOf(deps, companyId, period, search),
     deps.periodClosureRepository.find(companyId, period.start),
   ]);
 
   return {
-    ...buildCompanyTimesheet(period, employees, totals),
+    ...body,
     period,
     previousPeriodStart: previousPayPeriodStart(period),
     nextPeriodStart: nextPayPeriodStart(period),

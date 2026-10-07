@@ -82,6 +82,11 @@ export class UserAccount {
     return this.props.company?.id ?? null;
   }
 
+  // Un admin multiempresa no tiene empresa propia: la de la sesion se le agrega al cargarlo
+  withActiveCompany(company: AccountCompany): UserAccount {
+    return new UserAccount({ ...this.props, company });
+  }
+
   isLocked(now: Date): boolean {
     return this.props.lockedUntil !== null && this.props.lockedUntil > now;
   }

@@ -89,6 +89,33 @@ export async function createUser(prisma: PrismaClient, fixture: UserFixture) {
   return { ...user, password };
 }
 
+// Admin multiempresa con su paquete y las empresas que ya tiene asignadas
+export async function createMultiAdmin(
+  prisma: PrismaClient,
+  options: {
+    companyIds?: string[];
+    maxCompanies?: number;
+    maxEmployeesPerCompany?: number;
+    status?: 'active' | 'inactive';
+  } = {},
+) {
+  const user = await createUser(prisma, {
+    role: 'multi_company_admin',
+    ...(options.status && { status: options.status }),
+  });
+  await prisma.multiCompanyAdmin.create({
+    data: {
+      userId: user.id,
+      maxCompanies: options.maxCompanies ?? 3,
+      maxEmployeesPerCompany: options.maxEmployeesPerCompany ?? 10,
+    },
+  });
+  for (const companyId of options.companyIds ?? []) {
+    await prisma.companyMembership.create({ data: { userId: user.id, companyId } });
+  }
+  return user;
+}
+
 export async function createEmployee(
   prisma: PrismaClient,
   companyId: string,

@@ -19,7 +19,7 @@ const MIN_YEAR = 2000;
 const MAX_YEAR = 2100;
 const RANGE_MESSAGE = `La fecha debe estar entre los años ${MIN_YEAR} y ${MAX_YEAR}`;
 
-const workDate = z.iso
+export const workDate = z.iso
   .date()
   .refine((value) => value >= `${MIN_YEAR}-01-01` && value <= `${MAX_YEAR}-12-31`, RANGE_MESSAGE)
   .openapi({ example: '2026-06-01' });
@@ -133,7 +133,7 @@ export const myTimeEntrySchema = z
   })
   .openapi('MyTimeEntry');
 
-const employeeSummarySchema = z.object({
+export const employeeSummarySchema = z.object({
   id: z.uuid(),
   firstName: z.string(),
   lastName: z.string(),
@@ -451,7 +451,7 @@ export const timesheetQuery = z.object({
   }),
 });
 
-const searchParam = z
+export const searchParam = z
   .string()
   .trim()
   .min(1)
@@ -469,7 +469,7 @@ export const companyTimesheetExportQuery = z.object({
   search: searchParam,
 });
 
-const weekdaySchema = z.enum([
+export const weekdaySchema = z.enum([
   'monday',
   'tuesday',
   'wednesday',

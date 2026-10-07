@@ -117,6 +117,15 @@ export class PrismaCompanyRepository implements CompanyRepository {
     return { items: rows.map(toView), page: page.page, limit: page.limit, total };
   }
 
+  async listByMember(userId: string): Promise<CompanyView[]> {
+    const rows = await this.db.client.company.findMany({
+      where: { memberships: { some: { userId } } },
+      select: COMPANY_SELECT,
+      orderBy: [{ name: 'asc' }, { id: 'asc' }],
+    });
+    return rows.map(toView);
+  }
+
   async update(id: string, patch: CompanyPatch): Promise<void> {
     await this.db.client.company.update({
       where: { id },

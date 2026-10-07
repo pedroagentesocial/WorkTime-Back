@@ -5,6 +5,8 @@ export interface StoredRefreshToken {
   readonly userId: string;
   readonly familyId: string;
   readonly tokenVersion: number;
+  // Empresa activa de la sesion; null si no hay (se guarda para que renovar no la pierda)
+  readonly companyId: string | null;
   readonly expiresAt: Date;
   readonly revokedAt: Date | null;
   readonly replacedById: string | null;
@@ -16,6 +18,7 @@ export interface NewRefreshToken {
   readonly familyId: string;
   readonly tokenHash: string;
   readonly tokenVersion: number;
+  readonly companyId: string | null;
   readonly expiresAt: Date;
   readonly createdAt: Date;
   readonly client: ClientInfo;

@@ -58,6 +58,7 @@ export class SessionIssuer {
       familyId: options.familyId ?? idGenerator.generate(),
       tokenHash: secureRandom.sha256(refreshToken),
       tokenVersion: account.tokenVersion,
+      companyId: account.companyId,
       expiresAt: refreshTokenExpiresAt,
       client: options.client,
     });

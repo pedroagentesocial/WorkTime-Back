@@ -259,7 +259,7 @@ describe('POST /auth/login', () => {
     expect(me.body.data).toMatchObject({
       role: 'platform_admin',
       company: null,
-      permissions: ['companies.manage'],
+      permissions: ['companies.manage', 'multi_admins.manage'],
     });
   });
 
