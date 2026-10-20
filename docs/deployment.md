@@ -33,6 +33,16 @@ El PostgreSQL debe aceptar conexiones desde Docker. Desde un contenedor, el serv
 3. Levanta todo: `docker compose up -d --build`. Espera a que `docker compose ps` muestre `api` en `healthy`.
 4. Crea el admin global, una sola vez: `docker compose run --rm migrate npm run db:seed`. Después puedes quitar `SEED_ADMIN_PASSWORD` del `.env`.
 
+## Rescatar al admin global
+
+Si el admin global olvidó su contraseña o quedó bloqueado, desde el servidor:
+
+```bash
+docker compose run --rm --no-deps api node dist/cli/recover-platform-admin.js
+```
+
+Muestra **una sola vez** una contraseña temporal que vence en 72 h y obliga a cambiarla al entrar. También quita el bloqueo por intentos, reactiva la cuenta y cierra todas sus sesiones. Queda el evento `platform_admin.recovered` en `security_events`. No hay ruta HTTP para esto: solo lo puede hacer quien tiene acceso al servidor. En desarrollo es `npm run admin:recover`.
+
 ## Actualizar
 
 ```bash

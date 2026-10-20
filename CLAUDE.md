@@ -88,6 +88,7 @@ npm run build
 npm run db:migrate       # crea y aplica migración (desarrollo)
 npm run db:migrate:create  # crea sin aplicar, para editar el SQL
 npm run db:seed          # crea el admin global si no existe
+npm run admin:recover    # rescate del admin global: temporal nueva, desbloqueo y cierre de sesiones
 npm run docs:api         # regenera API.md
 ```
 
@@ -106,6 +107,7 @@ npm run docs:api         # regenera API.md
 - **Anular:** no se borra (`voided_at`, `voided_by_id`, `void_reason`); un anulado no cuenta en nada. **Toda consulta nueva sobre `time_entries` debe filtrar `voided_at IS NULL`.** El empleado no ve los anulados.
 - **Identificadores:** código de empresa aleatorio e inmutable (`K7QF-29MX`; identifica, no autentica); prefijo de 3 letras por empresa y código de empleado `PREFIJO-0001` consecutivo asignado por el sistema, que no se reutiliza ni se edita. Triggers de BD lo protegen. El teléfono del empleado es opcional e informativo.
 - **Admin multiempresa:** solo el admin global lo crea (`/platform/multi-admins`), le asigna o quita empresas y fija su paquete. Él crea empresas con su admin dentro del paquete (`POST /portfolio/companies`; el máximo de empleados de cada una es el del paquete). Una empresa siempre nace con su `company_admin`; no hay empresas sin admin. No cambia `maxEmployees`, no suspende empresas ni toca su propio paquete. Siempre hay un solo admin global, creado por el seed.
+- **Rescate del admin global** (`src/cli/recover-platform-admin.ts`, caso de uso `RecoverPlatformAdminUseCase` en `platform`): como nadie está por encima de él, se recupera **solo desde la consola del servidor**, sin ruta HTTP (tener acceso al servidor y a la BD es la autoridad). Le da una contraseña temporal de 16 caracteres que vence en 72 h, lo desbloquea, lo reactiva, incrementa `tokenVersion` y deja el evento `platform_admin.recovered` con `recordOrThrow`. Si hay cero o más de un admin global no toca nada (`PLATFORM_ADMIN_NOT_FOUND`, `PLATFORM_ADMIN_AMBIGUOUS`). La contraseña del seed solo sirve para el primer inicio de sesión, que obliga a cambiarla.
 - **Sesiones:** `users.token_version` anula todos los access y refresh tokens al incrementarse (cambio o reset de contraseña, desactivación, `logout-all`, `revoke-sessions`). Solo se puede cerrar todas las sesiones, no una sola.
 - **Limpieza** (`modules/maintenance`, `src/config/retention.ts`): borra sesiones completas viejas y `security_events` de más de 365 días, salvo las acciones del admin sobre la asistencia. Registros de horas, correcciones, reportes y cierres nunca se borran.
 - **Actividad del admin** (`GET /company/activity`): solo sus acciones sobre la asistencia, sin inicios de sesión ni IPs.

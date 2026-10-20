@@ -31,6 +31,7 @@ Los tests e2e usan la conexión del `.env` sobre una BD con sufijo `_test` (p. e
 | `db:migrate` / `db:migrate:create` | Crea una migración (con o sin aplicarla) |
 | `db:deploy` | Aplica migraciones pendientes (producción) |
 | `db:seed`, `db:studio`, `db:status`, `db:generate` | Utilidades de Prisma |
+| `admin:recover` | Rescata al admin global: contraseña temporal nueva, desbloqueo y cierre de sesiones |
 | `docs:api` | Regenera `API.md` |
 
 ## Estructura

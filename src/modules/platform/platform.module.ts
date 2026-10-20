@@ -14,6 +14,8 @@ import { ListMultiAdminsUseCase } from './application/list-multi-admins.use-case
 import { ListMyCompaniesUseCase } from './application/list-my-companies.use-case.js';
 import type { CompanyRepository } from './application/ports/company.repository.js';
 import type { MultiAdminRepository } from './application/ports/multi-admin.repository.js';
+import type { PlatformAdminRepository } from './application/ports/platform-admin.repository.js';
+import { RecoverPlatformAdminUseCase } from './application/recover-platform-admin.use-case.js';
 import { RemoveCompanyFromMultiAdminUseCase } from './application/remove-company-from-multi-admin.use-case.js';
 import { ResetCompanyAdminPasswordUseCase } from './application/reset-company-admin-password.use-case.js';
 import { ResetMultiAdminPasswordUseCase } from './application/reset-multi-admin-password.use-case.js';
@@ -21,6 +23,7 @@ import { UpdateCompanyUseCase } from './application/update-company.use-case.js';
 import { UpdateMultiAdminUseCase } from './application/update-multi-admin.use-case.js';
 import { PrismaCompanyRepository } from './infrastructure/prisma-company.repository.js';
 import { PrismaMultiAdminRepository } from './infrastructure/prisma-multi-admin.repository.js';
+import { PrismaPlatformAdminRepository } from './infrastructure/prisma-platform-admin.repository.js';
 import { PrismaPortfolioScope } from './infrastructure/prisma-portfolio-scope.js';
 import { multiAdminRoutes } from './presentation/multi-admin.routes.js';
 import { platformRoutes } from './presentation/platform.routes.js';
@@ -35,6 +38,10 @@ declare module '#shared/composition/container.js' {
     updateCompany: UpdateCompanyUseCase;
     changeCompanyStatus: ChangeCompanyStatusUseCase;
     resetCompanyAdminPassword: ResetCompanyAdminPasswordUseCase;
+
+    platformAdminRepository: PlatformAdminRepository;
+    // Solo lo usa el comando de consola admin:recover
+    recoverPlatformAdmin: RecoverPlatformAdminUseCase;
 
     multiAdminRepository: MultiAdminRepository;
     createMultiAdmin: CreateMultiAdminUseCase;
@@ -65,6 +72,9 @@ export const platformModule: AppModule = {
       updateCompany: asClass(UpdateCompanyUseCase).singleton(),
       changeCompanyStatus: asClass(ChangeCompanyStatusUseCase).singleton(),
       resetCompanyAdminPassword: asClass(ResetCompanyAdminPasswordUseCase).singleton(),
+
+      platformAdminRepository: asClass(PrismaPlatformAdminRepository).singleton(),
+      recoverPlatformAdmin: asClass(RecoverPlatformAdminUseCase).singleton(),
 
       multiAdminRepository: asClass(PrismaMultiAdminRepository).singleton(),
       createMultiAdmin: asClass(CreateMultiAdminUseCase).singleton(),

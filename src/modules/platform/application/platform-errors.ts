@@ -16,4 +16,14 @@ export const PlatformErrors = {
       'La empresa ya está asignada a ese administrador',
     ),
   emailTaken: () => new ConflictError('EMAIL_TAKEN', 'Ya existe un usuario con ese email'),
+  platformAdminNotFound: () =>
+    new NotFoundError(
+      'PLATFORM_ADMIN_NOT_FOUND',
+      'No existe un admin global; créalo con npm run db:seed',
+    ),
+  platformAdminAmbiguous: () =>
+    new ConflictError(
+      'PLATFORM_ADMIN_AMBIGUOUS',
+      'Hay más de un admin global; revisa la base de datos antes de continuar',
+    ),
 };

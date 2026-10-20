@@ -23,6 +23,7 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 - Bloqueo tras 3 intentos fallidos: 30 s, duplicándose en cada reincidencia hasta 15 min (`users.lock_level`, se reinicia al entrar bien o tras 15 min sin reincidir), con reserva atómica del intento: ni con ráfagas en paralelo se prueban más contraseñas.
 - Login sin enumeración: mismo mensaje y trabajo equivalente para email inexistente, contraseña incorrecta o cuenta bloqueada.
 - Contraseñas temporales aleatorias (CSPRNG), vencen en 72 h, obligan a cambiarse y no sirven para renovar sesión una vez vencidas.
+- Rescate del admin global solo por consola del servidor (`npm run admin:recover`, sin ruta HTTP): temporal nueva, desbloqueo y cierre de sesiones, auditado dentro de la transacción. La contraseña del seed solo vale para el primer inicio de sesión.
 
 **Entrada y HTTP**
 
