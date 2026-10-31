@@ -1,6 +1,8 @@
 import { ConflictError, ValidationError } from '#shared/domain/errors.js';
 import { localDateOf } from '#shared/domain/timezone.js';
+import type { ClockLocation } from './clock-location.js';
 import { addDays } from './pay-period.js';
+import type { ClockZone } from './work-zone.js';
 import { durationSeconds } from './work-hours.js';
 
 export const MANUAL_ENTRY_BACKFILL_DAYS = 14;
@@ -20,6 +22,10 @@ export interface TimeEntryProps {
   readonly closeSource: TimeEntryCloseSource | null;
   readonly dailyLimitWaived: boolean;
   readonly createdReason: string | null;
+  // Solo la entrada de un marcaje del propio empleado; null si la hizo un admin o es anterior a este dato
+  readonly clockInLocation: ClockLocation | null;
+  // Si cayo dentro o fuera de una zona de trabajo; null si la empresa no tenia zonas o no hubo ubicacion
+  readonly clockInZone: ClockZone | null;
 }
 
 export interface TimeRange {
@@ -43,6 +49,8 @@ export class TimeEntry {
     timezone: string;
     source: TimeEntrySource;
     dailyLimitWaived?: boolean;
+    location?: ClockLocation | null;
+    zone?: ClockZone | null;
   }): TimeEntry {
     return new TimeEntry({
       id: input.id,
@@ -56,6 +64,8 @@ export class TimeEntry {
       closeSource: null,
       dailyLimitWaived: input.dailyLimitWaived ?? false,
       createdReason: null,
+      clockInLocation: input.location ?? null,
+      clockInZone: input.zone ?? null,
     });
   }
 
@@ -96,6 +106,8 @@ export class TimeEntry {
       closeSource: 'admin',
       dailyLimitWaived: false,
       createdReason: input.reason,
+      clockInLocation: null,
+      clockInZone: null,
     });
   }
 
@@ -131,6 +143,12 @@ export class TimeEntry {
   }
   get createdReason(): string | null {
     return this.props.createdReason;
+  }
+  get clockInLocation(): ClockLocation | null {
+    return this.props.clockInLocation;
+  }
+  get clockInZone(): ClockZone | null {
+    return this.props.clockInZone;
   }
   get isOpen(): boolean {
     return this.props.clockOutAt === null;

@@ -3,6 +3,9 @@ import { paginationQuery, uuidSchema } from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
 import { CORRECTION_REASON_LIMITS } from '../application/correct-time-entry.use-case.js';
 import type { CorrectionView, TimeEntryView } from '../application/ports/time-entry.repository.js';
+import type { AttendanceMapResult } from '../application/ports/attendance-map.reader.js';
+import type { ClockLocation } from '../domain/clock-location.js';
+import type { ClockZone } from '../domain/work-zone.js';
 import { DAILY_REPORT_LIMITS } from '../domain/daily-report.js';
 import type { DailyReportView } from '../application/ports/daily-report.repository.js';
 import type { PayPeriodStatus } from '../application/pay-period.use-cases.js';
@@ -43,6 +46,16 @@ export const companyTimeEntriesQuery = paginationQuery.extend({
   status: z.enum(['open', 'closed', 'voided']).optional().openapi({
     description: 'Sin estado no se incluyen los anulados; voided trae solo los anulados',
   }),
+  employeeId: uuidSchema.optional(),
+  location: z.enum(['without', 'outside']).optional().openapi({
+    description:
+      'without: solo los marcajes sin ubicación guardada; outside: solo los marcados fuera de una zona de trabajo',
+  }),
+});
+
+export const attendanceMapQuery = z.object({
+  from: workDate.optional().openapi({ description: 'Día laboral inicial (inclusive)' }),
+  to: workDate.optional().openapi({ description: 'Día laboral final (inclusive)' }),
   employeeId: uuidSchema.optional(),
 });
 
@@ -98,6 +111,29 @@ export const manualTimeEntryBody = z
   .strict()
   .openapi('CreateManualTimeEntryRequest');
 
+export const locationSchema = z
+  .object({
+    latitude: z.number().openapi({ example: 40.7608, description: 'Grados, de -90 a 90' }),
+    longitude: z.number().openapi({ example: -111.891, description: 'Grados, de -180 a 180' }),
+    accuracyMeters: z.number().openapi({
+      example: 12,
+      description: 'Precisión que reporta el dispositivo, en metros. Una baja no impide marcar',
+    }),
+  })
+  .openapi('ClockLocation');
+
+export const zoneSchema = z
+  .object({
+    status: z.enum(['inside', 'outside']).openapi({
+      description: 'inside: dentro de una zona de trabajo; outside: fuera de todas',
+    }),
+    site: z.object({ id: z.uuid(), name: z.string() }).openapi({
+      description: 'La zona más cercana al punto donde marcó',
+    }),
+    distanceMeters: z.number().int().openapi({ description: 'Metros hasta el centro de esa zona' }),
+  })
+  .openapi('ClockZone');
+
 const timeEntryFields = {
   id: z.uuid(),
   status: entryStatus,
@@ -124,6 +160,14 @@ const timeEntryFields = {
     description:
       'Quién cerró el registro: el empleado, un admin o el límite diario. null si sigue abierto o es anterior a este dato',
   }),
+  clockInLocation: locationSchema.or(z.null()).openapi({
+    description:
+      'Dónde estaba el empleado al marcar su entrada. null si la registró un admin o es anterior a este dato',
+  }),
+  clockInZone: zoneSchema.or(z.null()).openapi({
+    description:
+      'Si cayó dentro o fuera de una zona de trabajo al marcar. null si la empresa no tenía zonas o no hubo ubicación',
+  }),
 };
 
 export const myTimeEntrySchema = z
@@ -132,6 +176,44 @@ export const myTimeEntrySchema = z
     corrected: z.boolean().openapi({ description: 'true si un admin lo corrigió' }),
   })
   .openapi('MyTimeEntry');
+
+export const attendanceMapSchema = z
+  .object({
+    truncated: z.boolean().openapi({
+      description:
+        'true si había más marcajes con ubicación que el tope y se devolvieron los más recientes',
+    }),
+    points: z.array(
+      z.object({
+        id: z.uuid(),
+        company: z.object({ id: z.uuid(), name: z.string(), code: z.string() }),
+        employee: z.object({
+          id: z.uuid(),
+          firstName: z.string(),
+          lastName: z.string(),
+          employeeCode: z.string().nullable(),
+        }),
+        workDate,
+        clockInAt: z.iso.datetime(),
+        timezone: z.string(),
+        open: z.boolean().openapi({ description: 'true mientras la entrada sigue abierta' }),
+        clockInLocation: locationSchema,
+        clockInZone: zoneSchema.or(z.null()),
+      }),
+    ),
+  })
+  .openapi('AttendanceMap');
+
+export function toAttendanceMapDto(result: AttendanceMapResult) {
+  return {
+    truncated: result.truncated,
+    points: result.points.map((point) => ({
+      ...point,
+      clockInAt: point.clockInAt.toISOString(),
+      clockInZone: zoneDto(point.clockInZone),
+    })),
+  };
+}
 
 export const employeeSummarySchema = z.object({
   id: z.uuid(),
@@ -191,6 +273,22 @@ export const clockStatusSchema = z
       description:
         'false si ya hay una entrada abierta, hay reportes pendientes o se alcanzó el límite diario',
     }),
+    canCheckIn: z.boolean().openapi({
+      description:
+        'true si la empresa deja registrar llegadas (`POST /me/check-ins`), esté o no marcada la entrada',
+    }),
+    selfEdit: z
+      .object({
+        days: z.number().int().openapi({ description: 'Cuántos días hacia atrás puede corregir' }),
+        until: z.iso.date().nullable().openapi({
+          description: 'Último día del permiso; null = sin vencimiento',
+        }),
+      })
+      .or(z.null())
+      .openapi({
+        description:
+          'Si hoy puede corregir sus marcajes (`PATCH /me/time-entries/{id}`); null si no tiene permiso o ya venció',
+      }),
     dailyReport: z
       .object({
         required: z
@@ -235,6 +333,12 @@ export const rosterEntrySchema = z
     openEntryId: z.uuid().nullable(),
     clockedInAt: z.iso.datetime().nullable(),
     clockedInLocal: z.string().nullable(),
+    clockedInLocation: locationSchema.or(z.null()).openapi({
+      description: 'Dónde marcó la entrada abierta; null si no hay o la hizo un admin',
+    }),
+    clockedInZone: zoneSchema.or(z.null()).openapi({
+      description: 'Si la entrada abierta cayó dentro o fuera de una zona de trabajo',
+    }),
     elapsedSeconds: z.number().int().nullable().openapi({ description: 'De la entrada abierta' }),
     workedTodaySeconds: z.number().int(),
     workedTodayHours: z.number(),
@@ -266,12 +370,25 @@ export function rosterRowDto(row: RosterRow) {
     clockedInLocal: employee.openEntry
       ? toLocalIsoString(employee.openEntry.clockInAt, employee.effectiveTimezone)
       : null,
+    clockedInLocation: employee.openEntry?.clockInLocation ?? null,
+    clockedInZone: zoneDto(employee.openEntry?.clockInZone ?? null),
     elapsedSeconds: row.elapsedSeconds,
     workedTodaySeconds: row.workedTodaySeconds,
     workedTodayHours: toDecimalHours(row.workedTodaySeconds),
     dailyLimit: row.dailyLimit,
   };
 }
+
+// Los campos son opcionales en el esquema para responder LOCATION_REQUIRED con un mensaje claro
+export const clockInBody = z
+  .object({
+    latitude: locationSchema.shape.latitude.optional(),
+    longitude: locationSchema.shape.longitude.optional(),
+    accuracyMeters: locationSchema.shape.accuracyMeters.optional(),
+  })
+  .strict()
+  .optional()
+  .openapi('ClockInRequest');
 
 export const clockOutBody = z
   .object({
@@ -342,7 +459,7 @@ export const activitySchema = z
     id: z.uuid(),
     type: z.enum(ATTENDANCE_ACTIVITY_TYPES).openapi({
       description:
-        'time_entry.clocked_in_by_admin, clocked_out_by_admin, created_by_admin, corrected_by_admin, voided_by_admin o pay_period.closed',
+        'time_entry.clocked_in_by_admin, clocked_out_by_admin, created_by_admin, corrected_by_admin, corrected_by_employee (el empleado corrigió su propio marcaje con permiso), voided_by_admin, check_in.voided_by_admin o pay_period.closed',
     }),
     occurredAt: z.iso.datetime(),
     actor: z
@@ -352,6 +469,8 @@ export const activitySchema = z
     employee: employeeSummarySchema.nullable().openapi({ description: 'A quién afectó' }),
     details: z.object({
       timeEntryId: z.uuid().optional(),
+      checkInId: z.uuid().optional(),
+      checkedInAt: z.iso.datetime().optional(),
       reason: z.string().optional(),
       clockInAt: z.iso.datetime().optional(),
       clockOutAt: z.iso.datetime().nullable().optional(),
@@ -648,7 +767,19 @@ interface EntryTimes {
   readonly source: 'web' | 'admin';
   readonly closeSource: 'employee' | 'admin' | 'daily_limit' | null;
   readonly createdReason: string | null;
+  readonly clockInLocation: ClockLocation | null;
+  readonly clockInZone: ClockZone | null;
   readonly voided?: unknown;
+}
+
+export function zoneDto(zone: ClockZone | null) {
+  return zone
+    ? {
+        status: zone.status,
+        site: { id: zone.siteId, name: zone.siteName },
+        distanceMeters: zone.distanceMeters,
+      }
+    : null;
 }
 
 function baseDto(entry: EntryTimes) {
@@ -671,6 +802,8 @@ function baseDto(entry: EntryTimes) {
     source: entry.source,
     createdReason: entry.createdReason,
     closedBy: entry.closeSource,
+    clockInLocation: entry.clockInLocation,
+    clockInZone: zoneDto(entry.clockInZone),
   };
 }
 

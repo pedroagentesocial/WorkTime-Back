@@ -8,11 +8,11 @@ import type { UseCase } from '#shared/application/use-case.js';
 import { PlatformErrors } from './platform-errors.js';
 import type {
   PlatformAdminRepository,
-  PlatformAdminView,
+  PlatformAdminSummary,
 } from './ports/platform-admin.repository.js';
 
 export interface RecoverPlatformAdminOutput {
-  readonly admin: PlatformAdminView;
+  readonly admin: PlatformAdminSummary;
   readonly temporaryPassword: string;
   readonly temporaryPasswordExpiresAt: Date;
 }
@@ -20,12 +20,11 @@ export interface RecoverPlatformAdminOutput {
 interface Deps {
   platformAdminRepository: PlatformAdminRepository;
   temporaryPasswords: TemporaryPasswordIssuer;
-  transactions: TransactionRunner;
   securityEvents: SecurityEventRecorder;
+  transactions: TransactionRunner;
 }
 
-// Rescate del admin global desde la consola del servidor: no hay nadie por encima de el que pueda
-// restablecerlo, asi que la autoridad es tener acceso al servidor y a la BD. No tiene ruta HTTP
+// Solo se usa desde la terminal del servidor: quien la corre ya tiene acceso a la maquina y al .env
 export class RecoverPlatformAdminUseCase implements UseCase<void, RecoverPlatformAdminOutput> {
   constructor(private readonly deps: Deps) {}
 
@@ -33,21 +32,18 @@ export class RecoverPlatformAdminUseCase implements UseCase<void, RecoverPlatfor
     const temporary = await this.deps.temporaryPasswords.issue();
 
     const admin = await this.deps.transactions.run(async () => {
-      const admins = await this.deps.platformAdminRepository.listAll();
-      if (admins.length > 1) throw PlatformErrors.platformAdminAmbiguous();
-      const [admin] = admins;
-      if (!admin) throw PlatformErrors.platformAdminNotFound();
-
-      await this.deps.platformAdminRepository.recover(admin.id, {
+      const recovered = await this.deps.platformAdminRepository.recoverAccess({
         passwordHash: temporary.passwordHash,
         expiresAt: temporary.expiresAt,
       });
+      if (!recovered) throw PlatformErrors.platformAdminNotFound();
+      // Si no queda constancia no se cambia la contrasena
       await this.deps.securityEvents.recordOrThrow({
         type: SecurityEventType.PLATFORM_ADMIN_RECOVERED,
-        userId: admin.id,
-        metadata: { channel: 'cli' },
+        userId: recovered.id,
+        metadata: { source: 'cli' },
       });
-      return admin;
+      return recovered;
     });
 
     return {

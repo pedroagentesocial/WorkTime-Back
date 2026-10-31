@@ -5,7 +5,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -137,7 +143,7 @@ describe('GET /company/activity', () => {
 
   it('no muestra inicios de sesión ni acciones del propio empleado', async () => {
     const { app, asAdmin, asAna } = await setup();
-    await post(app, asAna, '/me/clock-in');
+    await post(app, asAna, '/me/clock-in', CLOCK_IN_LOCATION);
 
     const res = await get(app, asAdmin, '/company/activity');
     expect(res.body.data).toEqual([]);

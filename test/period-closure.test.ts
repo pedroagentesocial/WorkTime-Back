@@ -5,7 +5,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -316,7 +322,7 @@ describe('un periodo cerrado ya no admite cambios', () => {
     await addEntry(company.id, employee.id, '2026-09-25');
     await closePeriod(app, asAdmin);
 
-    const blocked = await post(app, asEmployee, '/me/clock-in');
+    const blocked = await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION);
     expect(blocked.body.error.code).toBe('DAILY_REPORT_PENDING');
 
     const written = await request(app)
@@ -324,7 +330,7 @@ describe('un periodo cerrado ya no admite cambios', () => {
       .set(asEmployee)
       .send({ content: 'Trabajé en el inventario' });
     expect(written.status).toBe(200);
-    expect((await post(app, asEmployee, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('el CSV de un periodo cerrado no cambia', async () => {
@@ -350,7 +356,7 @@ describe('un periodo cerrado ya no admite cambios', () => {
     expect(early.status).toBe(409);
     expect(early.body.error.code).toBe('PERIOD_NOT_FINISHED');
 
-    const clockIn = await post(app, asKai, '/me/clock-in');
+    const clockIn = await post(app, asKai, '/me/clock-in', CLOCK_IN_LOCATION);
     expect(clockIn.status).toBe(201);
     expect(clockIn.body.data.workDate).toBe('2026-10-04');
   });
@@ -373,7 +379,7 @@ describe('un periodo cerrado ya no admite cambios', () => {
       },
     });
 
-    const own = await post(app, asKai, '/me/clock-in');
+    const own = await post(app, asKai, '/me/clock-in', CLOCK_IN_LOCATION);
     expect(own.status).toBe(409);
     expect(own.body.error.code).toBe('PERIOD_CLOSED');
     const byAdmin = await post(app, asAdmin, `/company/employees/${employee.id}/clock-in`);

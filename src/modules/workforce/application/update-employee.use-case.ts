@@ -45,6 +45,9 @@ export class UpdateEmployeeUseCase implements UseCase<UpdateEmployeeInput, Emplo
       ...(patch.dailyLimitMinutes !== undefined && {
         dailyLimitMinutes: patch.dailyLimitMinutes,
       }),
+      ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
+      ...(patch.allowSelfEdit !== undefined && { allowSelfEdit: patch.allowSelfEdit }),
+      ...(patch.selfEditUntil !== undefined && { selfEditUntil: patch.selfEditUntil }),
     };
     if (changes.timezone !== undefined) EmployeeRules.assertTimezone(changes.timezone);
     if (changes.dailyLimitMinutes !== undefined) DailyLimit.assertValid(changes.dailyLimitMinutes);

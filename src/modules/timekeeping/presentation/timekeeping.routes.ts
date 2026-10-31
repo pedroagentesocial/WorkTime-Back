@@ -2,6 +2,7 @@ import { Permission } from '#shared/domain/permissions.js';
 import { created, defineRoute, ok, paginated, type AnyRoute } from '#shared/http/route.js';
 import { dataResponse, idParams, pageResponse } from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
+import type { GetAttendanceMapUseCase } from '../application/attendance-map.use-cases.js';
 import type {
   ClockInUseCase,
   ClockOutUseCase,
@@ -24,6 +25,7 @@ import type {
   ListMyDailyReportsUseCase,
   SaveMyDailyReportUseCase,
 } from '../application/daily-report.use-cases.js';
+import type { CorrectOwnTimeEntryUseCase } from '../application/self-correction.use-case.js';
 import type { CorrectTimeEntryUseCase } from '../application/correct-time-entry.use-case.js';
 import type {
   ClosePayPeriodUseCase,
@@ -53,6 +55,7 @@ import { centihoursToHours, durationSeconds, toDecimalHours } from '../domain/wo
 import {
   adminClockInBody,
   attendanceSummarySchema,
+  clockInBody,
   clockOutBody,
   companyPendingReportSchema,
   companyPendingReportsQuery,
@@ -86,7 +89,10 @@ import {
   rosterRowDto,
   clockStatusSchema,
   companyEntryFromView,
+  attendanceMapQuery,
+  attendanceMapSchema,
   companyTimeEntriesQuery,
+  toAttendanceMapDto,
   companyTimeEntrySchema,
   correctionDto,
   correctionSchema,
@@ -101,6 +107,7 @@ import {
 } from './timekeeping.schemas.js';
 
 interface Deps {
+  getAttendanceMap: GetAttendanceMapUseCase;
   clockIn: ClockInUseCase;
   clockOut: ClockOutUseCase;
   getClockStatus: GetClockStatusUseCase;
@@ -110,6 +117,7 @@ interface Deps {
   listTimeEntryCorrections: ListTimeEntryCorrectionsUseCase;
   getLiveAttendance: GetLiveAttendanceUseCase;
   correctTimeEntry: CorrectTimeEntryUseCase;
+  correctOwnTimeEntry: CorrectOwnTimeEntryUseCase;
   adminClockIn: AdminClockInUseCase;
   getAttendanceRoster: GetAttendanceRosterUseCase;
   saveMyDailyReport: SaveMyDailyReportUseCase;
@@ -181,6 +189,8 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
           dailyReport: status.dailyReport,
           pendingReports: status.pendingReports,
           canClockIn: status.canClockIn,
+          canCheckIn: status.canCheckIn,
+          selfEdit: status.selfEdit,
           elapsedSeconds: status.openEntry
             ? durationSeconds(status.openEntry.clockInAt, status.serverTime)
             : null,
@@ -195,11 +205,18 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
       summary: 'Marcar entrada',
       description:
         'La hora la registra el servidor (no se envía). Queda guardada la zona horaria del ' +
-        'empleado y su día laboral local.',
+        'empleado y su día laboral local. Hay que mandar la ubicación del dispositivo ' +
+        '(`latitude`, `longitude` y `accuracyMeters`); sin ella no se marca. Solo se guarda en la ' +
+        'entrada, nunca de forma continua.',
       tags: ME_TAGS,
       auth: Permission.ATTENDANCE_CLOCK_OWN,
+      request: { body: clockInBody },
       responses: {
         201: { description: 'Entrada registrada', schema: dataResponse(myTimeEntrySchema) },
+        400: {
+          description: 'Falta la ubicación o no es válida',
+          errorCodes: ['LOCATION_REQUIRED', 'INVALID_LOCATION'],
+        },
         404: NO_PROFILE,
         409: {
           description:
@@ -207,7 +224,14 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
           errorCodes: ['ALREADY_CLOCKED_IN', 'DAILY_LIMIT_REACHED', 'DAILY_REPORT_PENDING'],
         },
       },
-      handler: async ({ actor }) => created(myEntryFromDomain(await deps.clockIn.execute(actor))),
+      handler: async ({ actor, body }) => {
+        const { latitude, longitude, accuracyMeters } = body ?? {};
+        const location =
+          latitude !== undefined && longitude !== undefined && accuracyMeters !== undefined
+            ? { latitude, longitude, accuracyMeters }
+            : undefined;
+        return created(myEntryFromDomain(await deps.clockIn.execute({ actor, location })));
+      },
     }),
 
     defineRoute({
@@ -361,6 +385,55 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
           totalHours: centihoursToHours(result.totalCentihours),
         });
       },
+    }),
+
+    defineRoute({
+      method: 'patch',
+      path: '/me/time-entries/:id',
+      summary: 'Corregir mi marcaje',
+      description:
+        'Solo si el admin te dio permiso y no ha vencido (`selfEdit` en `/me/clock-status`). Cambia la ' +
+        'entrada o la salida de un marcaje tuyo de los últimos días que permite la empresa, también ' +
+        'para poner la salida que olvidaste un día anterior. La entrada abierta de hoy se termina ' +
+        'con `POST /me/clock-out`. El motivo es obligatorio y el admin ve el cambio en su actividad.',
+      tags: ME_TAGS,
+      auth: Permission.ATTENDANCE_CLOCK_OWN,
+      request: { params: idParams, body: correctTimeEntryBody },
+      responses: {
+        200: { description: 'Marcaje corregido', schema: dataResponse(myTimeEntrySchema) },
+        400: {
+          description: 'Corrección inválida',
+          errorCodes: ['INVALID_TIME_RANGE', 'TIME_IN_FUTURE', 'NO_CHANGES', 'INVALID_REASON'],
+        },
+        403: { description: 'Sin permiso para corregir', errorCodes: ['SELF_EDIT_NOT_ALLOWED'] },
+        404: {
+          description: 'El marcaje no existe o no es tuyo',
+          errorCodes: ['TIME_ENTRY_NOT_FOUND', 'EMPLOYEE_PROFILE_NOT_FOUND'],
+        },
+        409: {
+          description: 'El cambio no se puede hacer',
+          errorCodes: [
+            'SELF_EDIT_OUT_OF_RANGE',
+            'SELF_EDIT_OPEN_TODAY',
+            'SELF_EDIT_OVER_LIMIT',
+            'TIME_ENTRY_OVERLAP',
+            'TIME_ENTRY_CHANGED',
+            'TIME_ENTRY_VOIDED',
+            'PERIOD_CLOSED',
+          ],
+        },
+      },
+      handler: async ({ actor, params, body, request }) =>
+        ok(
+          myEntryFromView(
+            await deps.correctOwnTimeEntry.execute({
+              actor,
+              client: request,
+              timeEntryId: params.id,
+              ...body,
+            }),
+          ),
+        ),
     }),
 
     defineRoute({
@@ -621,6 +694,27 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
 
     defineRoute({
       method: 'get',
+      path: '/company/attendance/map',
+      summary: 'Dónde marcó la entrada cada empleado',
+      description:
+        'Marcajes con ubicación en un rango de días laborales (`from`/`to`), los más recientes ' +
+        'primero, con el empleado, dentro o fuera de zona y si siguen abiertos. Devuelve hasta ' +
+        '500 puntos y `truncated` avisa si había más. Filtra por `employeeId`.',
+      tags: COMPANY_TAGS,
+      auth: Permission.ATTENDANCE_READ_ALL,
+      rateLimit: 'heavyRead',
+      request: { query: attendanceMapQuery },
+      responses: {
+        200: { description: 'Puntos del mapa', schema: dataResponse(attendanceMapSchema) },
+        400: { description: 'Rango inválido', errorCodes: ['INVALID_DATE_RANGE'] },
+        404: { description: 'Empleado inexistente', errorCodes: ['EMPLOYEE_NOT_FOUND'] },
+      },
+      handler: async ({ actor, query }) =>
+        ok(toAttendanceMapDto(await deps.getAttendanceMap.execute({ actor, filter: query }))),
+    }),
+
+    defineRoute({
+      method: 'get',
       path: '/company/attendance/roster',
       summary: 'Empleados con su estado IN / OUT',
       description:
@@ -775,7 +869,13 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
           search,
           page: { page, limit },
         });
-        return paginated(sheet.rows, sheet, {
+        const rows = sheet.rows.map(({ employee, hours, totalHours, openEntries }) => ({
+          employee,
+          hours,
+          totalHours,
+          openEntries,
+        }));
+        return paginated(rows, sheet, {
           period: sheet.period,
           previousPeriodStart: sheet.previousPeriodStart,
           nextPeriodStart: sheet.nextPeriodStart,

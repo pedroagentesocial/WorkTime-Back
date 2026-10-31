@@ -1,4 +1,6 @@
 import type { PageRequest } from '#shared/application/pagination.js';
+import type { ClockLocation } from '../../domain/clock-location.js';
+import type { ClockZone } from '../../domain/work-zone.js';
 import type { TimesheetEmployee } from '../../domain/company-timesheet.js';
 
 export interface EmployeeProfile {
@@ -10,6 +12,16 @@ export interface EmployeeProfile {
   readonly active: boolean;
   readonly requireDailyReport: boolean;
   readonly dailyReportRequiredSince: string;
+  // Si la empresa solo deja marcar la entrada dentro de una zona de trabajo
+  readonly enforceWorkSites: boolean;
+  // Si puede registrar llegadas sin marcar entrada: lo suyo manda y, si no tiene, lo de la empresa
+  readonly allowCheckIns: boolean;
+  // Permiso del admin para corregir sus horas: hasta que dia y cuantos dias hacia atras
+  readonly selfEdit: {
+    readonly allowed: boolean;
+    readonly until: string | null;
+    readonly days: number;
+  };
 }
 
 export interface RosterEmployee {
@@ -24,6 +36,8 @@ export interface RosterEmployee {
     readonly clockInAt: Date;
     readonly workDate: string;
     readonly dailyLimitWaived: boolean;
+    readonly clockInLocation: ClockLocation | null;
+    readonly clockInZone: ClockZone | null;
   } | null;
 }
 

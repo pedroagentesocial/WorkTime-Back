@@ -5,6 +5,8 @@ import type {
   TimeEntrySource,
   TimeRange,
 } from '../../domain/time-entry.js';
+import type { ClockLocation } from '../../domain/clock-location.js';
+import type { ClockZone } from '../../domain/work-zone.js';
 import type { EmployeeDayTotal } from '../../domain/company-timesheet.js';
 import type { DailyTotal } from '../../domain/timesheet.js';
 import type { WorkDateRange } from '../../domain/work-date-range.js';
@@ -27,6 +29,8 @@ export interface TimeEntryView {
   readonly closeSource: TimeEntryCloseSource | null;
   readonly corrections: number;
   readonly createdReason: string | null;
+  readonly clockInLocation: ClockLocation | null;
+  readonly clockInZone: ClockZone | null;
   readonly voided: {
     readonly at: Date;
     readonly reason: string;
@@ -39,6 +43,8 @@ export interface TimeEntryView {
 export interface TimeEntryFilter extends WorkDateRange {
   readonly employeeId?: string | undefined;
   readonly status?: 'open' | 'closed' | 'voided' | undefined;
+  // without: sin ubicacion guardada; outside: marcados fuera de una zona de trabajo
+  readonly location?: 'without' | 'outside' | undefined;
 }
 
 export interface TimeEntryPage extends Page<TimeEntryView> {

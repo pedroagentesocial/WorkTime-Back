@@ -112,8 +112,14 @@ describe('limpieza de eventos de seguridad', () => {
     );
   });
 
-  it('la lista que se conserva coincide con la actividad que ve el admin', () => {
-    expect([...KEPT_FOREVER_EVENT_TYPES].sort()).toEqual([...ATTENDANCE_ACTIVITY_TYPES].sort());
+  it('se conserva la actividad que ve el admin y los cambios de sueldo', () => {
+    expect([...KEPT_FOREVER_EVENT_TYPES].sort()).toEqual(
+      [
+        ...ATTENDANCE_ACTIVITY_TYPES,
+        'employee.pay_rate_changed',
+        'employee.pay_rate_removed',
+      ].sort(),
+    );
   });
 });
 

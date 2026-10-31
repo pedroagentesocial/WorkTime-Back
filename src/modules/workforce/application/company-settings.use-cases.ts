@@ -8,17 +8,22 @@ import type { Clock } from '#shared/application/ports/clock.js';
 import type { UseCase } from '#shared/application/use-case.js';
 import { CompanyRules } from '#shared/domain/company-rules.js';
 import { DailyLimit } from '#shared/domain/daily-limit.js';
+import { PayRules } from '#shared/domain/pay-rules.js';
 import { localDateOf } from '#shared/domain/timezone.js';
 import type {
   CompanySettingsPatch,
   CompanySettingsRepository,
   CompanySettingsView,
 } from './ports/company-settings.repository.js';
+import type { WorkSiteRepository } from './ports/work-site.repository.js';
+import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
 import { WorkforceErrors } from './workforce-errors.js';
 
 interface Deps {
   companySettingsRepository: CompanySettingsRepository;
   securityEvents: SecurityEventRecorder;
+  workSiteRepository: WorkSiteRepository;
+  transactions: TransactionRunner;
   clock: Clock;
 }
 
@@ -56,11 +61,16 @@ export class UpdateCompanySettingsUseCase implements UseCase<
       ...(patch.requireDailyReport !== undefined && {
         requireDailyReport: patch.requireDailyReport,
       }),
+      ...(patch.enforceWorkSites !== undefined && { enforceWorkSites: patch.enforceWorkSites }),
+      ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
+      ...(patch.currency !== undefined && { currency: patch.currency.toUpperCase() }),
+      ...(patch.selfEditDays !== undefined && { selfEditDays: patch.selfEditDays }),
       ...(patch.dailyLimitMinutes !== undefined && {
         dailyLimitMinutes: patch.dailyLimitMinutes,
       }),
     };
     if (changes.timezone !== undefined) CompanyRules.assertTimezone(changes.timezone);
+    if (changes.currency !== undefined) PayRules.assertCurrency(changes.currency);
     if (changes.dailyLimitMinutes !== undefined) DailyLimit.assertValid(changes.dailyLimitMinutes);
 
     // Al encender el reporte obligatorio solo cuentan los dias nuevos: el historial no bloquea a nadie
@@ -77,7 +87,14 @@ export class UpdateCompanySettingsUseCase implements UseCase<
           }
         : changes;
 
-    await this.deps.companySettingsRepository.update(companyId, patched);
+    await this.deps.transactions.run(async () => {
+      // Exigir zonas sin ninguna activa bloquearia a todos; se decide con la empresa bloqueada
+      if (patched.enforceWorkSites === true) {
+        const counts = await this.deps.workSiteRepository.lockAndCount(companyId);
+        if (!counts || counts.active === 0) throw WorkforceErrors.workSitesRequired();
+      }
+      await this.deps.companySettingsRepository.update(companyId, patched);
+    });
     await this.deps.securityEvents.record({
       type: SecurityEventType.COMPANY_SETTINGS_UPDATED,
       userId: actor.userId,

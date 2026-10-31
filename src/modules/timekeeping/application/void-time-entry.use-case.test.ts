@@ -26,6 +26,8 @@ function entryOn(date: string) {
     closeSource: 'employee',
     dailyLimitWaived: false,
     createdReason: null,
+    clockInLocation: null,
+    clockInZone: null,
   });
 }
 

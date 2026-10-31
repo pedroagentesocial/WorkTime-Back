@@ -2,6 +2,8 @@ import { Permission } from '#shared/domain/permissions.js';
 import { defineRoute, ok, paginated, type AnyRoute } from '#shared/http/route.js';
 import { dataResponse } from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
+import type { GetPortfolioAttendanceMapUseCase } from '../application/attendance-map.use-cases.js';
+import type { GetPortfolioLiveUseCase } from '../application/portfolio-live.use-case.js';
 import type { GetPortfolioSummaryUseCase } from '../application/portfolio-summary.use-case.js';
 import type {
   ExportPortfolioDailyReportsUseCase,
@@ -13,9 +15,12 @@ import type {
 } from '../application/portfolio-timesheet.use-cases.js';
 import { portfolioDailyReportsCsv, portfolioTimesheetCsv } from './portfolio-csv.js';
 import {
+  portfolioAttendanceMapQuery,
   portfolioDailyReportSchema,
   portfolioDailyReportsExportQuery,
   portfolioDailyReportsQuery,
+  portfolioLiveQuery,
+  portfolioLiveSchema,
   portfolioSummaryQuery,
   portfolioSummarySchema,
   portfolioTimesheetExportQuery,
@@ -23,12 +28,16 @@ import {
   portfolioTimesheetQuery,
   portfolioTimesheetRowSchema,
   toPortfolioDailyReportDto,
+  toPortfolioLiveDto,
   toPortfolioSummaryDto,
 } from './portfolio.schemas.js';
 import { pageResponse } from '#shared/http/schemas.js';
+import { attendanceMapSchema, toAttendanceMapDto } from './timekeeping.schemas.js';
 
 interface Deps {
   getPortfolioSummary: GetPortfolioSummaryUseCase;
+  getPortfolioLive: GetPortfolioLiveUseCase;
+  getPortfolioAttendanceMap: GetPortfolioAttendanceMapUseCase;
   getPortfolioTimesheet: GetPortfolioTimesheetUseCase;
   exportPortfolioTimesheet: ExportPortfolioTimesheetUseCase;
   listPortfolioDailyReports: ListPortfolioDailyReportsUseCase;
@@ -72,6 +81,58 @@ export function portfolioRoutes(deps: Deps): AnyRoute[] {
 
     defineRoute({
       method: 'get',
+      path: '/portfolio/attendance/live',
+      summary: 'Quién está trabajando ahora en todas mis empresas, y desde dónde',
+      description:
+        'Una fila por empleado con la entrada abierta, con su empresa y el punto donde marcó ' +
+        '(`clockInLocation`, null si la registró un admin). Sirve para el mapa. Solo cuenta las ' +
+        'empresas activas.',
+      tags: TAGS,
+      auth: AUTH,
+      rateLimit: 'heavyRead',
+      request: { query: portfolioLiveQuery },
+      responses: {
+        200: { description: 'Quién trabaja ahora', schema: dataResponse(portfolioLiveSchema) },
+        404: NOT_FOUND,
+      },
+      handler: async ({ actor, query }) =>
+        ok(
+          toPortfolioLiveDto(
+            await deps.getPortfolioLive.execute({ actor, companyId: query.companyId }),
+          ),
+        ),
+    }),
+
+    defineRoute({
+      method: 'get',
+      path: '/portfolio/attendance/map',
+      summary: 'Dónde marcó la entrada cada empleado de todas mis empresas',
+      description:
+        'Marcajes con ubicación en un rango de días laborales (`from`/`to`), los más recientes ' +
+        'primero, con empresa, empleado, dentro o fuera de zona y si siguen abiertos. Devuelve ' +
+        'hasta 500 puntos y `truncated` avisa si había más. Acota con `companyId` o `employeeId`. ' +
+        'Solo cuenta las empresas activas.',
+      tags: TAGS,
+      auth: AUTH,
+      rateLimit: 'heavyRead',
+      request: { query: portfolioAttendanceMapQuery },
+      responses: {
+        200: { description: 'Puntos del mapa', schema: dataResponse(attendanceMapSchema) },
+        400: { description: 'Rango inválido', errorCodes: ['INVALID_DATE_RANGE'] },
+        404: NOT_FOUND,
+      },
+      handler: async ({ actor, query }) => {
+        const { companyId, ...filter } = query;
+        return ok(
+          toAttendanceMapDto(
+            await deps.getPortfolioAttendanceMap.execute({ actor, filter, companyId }),
+          ),
+        );
+      },
+    }),
+
+    defineRoute({
+      method: 'get',
       path: '/portfolio/timesheet',
       summary: 'Horas de todos mis empleados',
       description:
@@ -101,7 +162,14 @@ export function portfolioRoutes(deps: Deps): AnyRoute[] {
           companyId,
           page: { page, limit },
         });
-        return paginated(sheet.rows, sheet, {
+        const rows = sheet.rows.map(({ company, employee, hours, totalHours, openEntries }) => ({
+          company,
+          employee,
+          hours,
+          totalHours,
+          openEntries,
+        }));
+        return paginated(rows, sheet, {
           period: sheet.period,
           previousPeriodStart: sheet.previousPeriodStart,
           nextPeriodStart: sheet.nextPeriodStart,

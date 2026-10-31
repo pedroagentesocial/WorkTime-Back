@@ -28,6 +28,10 @@ export class PrismaCompanySettingsRepository implements CompanySettingsRepositor
         status: true,
         dailyLimitMinutes: true,
         requireDailyReport: true,
+        enforceWorkSites: true,
+        allowCheckIns: true,
+        selfEditDays: true,
+        currency: true,
         maxEmployees: true,
         _count: { select: { employees: { where: { user: { status: 'active' } } } } },
       },
@@ -46,6 +50,12 @@ export class PrismaCompanySettingsRepository implements CompanySettingsRepositor
         ...(patch.requireDailyReport !== undefined && {
           requireDailyReport: patch.requireDailyReport,
         }),
+        ...(patch.enforceWorkSites !== undefined && {
+          enforceWorkSites: patch.enforceWorkSites,
+        }),
+        ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
+        ...(patch.currency !== undefined && { currency: patch.currency }),
+        ...(patch.selfEditDays !== undefined && { selfEditDays: patch.selfEditDays }),
         ...(patch.dailyLimitMinutes !== undefined && {
           dailyLimitMinutes: patch.dailyLimitMinutes,
         }),

@@ -4,7 +4,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -61,7 +67,7 @@ const patch = async (app: Express, as: As, path: string, body: object) =>
     .set(await as())
     .send(body);
 
-const clockIn = (app: Express, as: As) => post(app, as, '/me/clock-in');
+const clockIn = (app: Express, as: As) => post(app, as, '/me/clock-in', CLOCK_IN_LOCATION);
 const clockOut = (app: Express, as: As) => post(app, as, '/me/clock-out');
 
 describe('configuración del límite diario', () => {

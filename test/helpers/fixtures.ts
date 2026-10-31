@@ -37,6 +37,9 @@ export async function employeeCodeFor(prisma: PrismaClient, companyId: string) {
 
 export const DEFAULT_PASSWORD = 'una-contraseña-segura';
 
+// Ubicacion que manda el empleado al marcar la entrada; sin ella el servidor no deja marcar
+export const CLOCK_IN_LOCATION = { latitude: 40.7608, longitude: -111.891, accuracyMeters: 12 };
+
 export async function createCompany(
   prisma: PrismaClient,
   overrides: {

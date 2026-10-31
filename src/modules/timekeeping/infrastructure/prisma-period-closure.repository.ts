@@ -16,6 +16,7 @@ const SELECT = {
   periodStart: true,
   periodEnd: true,
   totalCentihours: true,
+  currency: true,
   closedAt: true,
   closedBy: { select: { id: true, firstName: true, lastName: true } },
 } satisfies Prisma.PayPeriodClosureSelect;
@@ -31,6 +32,7 @@ function toView(row: Row): PeriodClosureView {
     periodStart: fromDbDate(row.periodStart),
     periodEnd: fromDbDate(row.periodEnd),
     totalCentihours: Number(row.totalCentihours),
+    currency: row.currency,
     closedAt: row.closedAt,
     closedBy: row.closedBy,
   };
@@ -70,7 +72,16 @@ export class PrismaPeriodClosureRepository implements PeriodClosureRepository {
           periodEnd: toDbDate(closure.periodEnd),
           totalCentihours: BigInt(closure.totalCentihours),
           closedById: closure.closedById,
+          currency: closure.currency,
         },
+      });
+      await this.db.client.payPeriodClosurePay.createMany({
+        data: closure.pays.map((pay) => ({
+          closureId: closure.id,
+          companyId: closure.companyId,
+          employeeId: pay.employeeId,
+          amountCents: BigInt(pay.amountCents),
+        })),
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -78,6 +89,14 @@ export class PrismaPeriodClosureRepository implements PeriodClosureRepository {
       }
       throw error;
     }
+  }
+
+  async findPays(companyId: string, closureId: string): Promise<Map<string, number>> {
+    const rows = await this.db.client.payPeriodClosurePay.findMany({
+      where: { companyId, closureId },
+      select: { employeeId: true, amountCents: true },
+    });
+    return new Map(rows.map((row) => [row.employeeId, Number(row.amountCents)]));
   }
 
   async lockForChanges(companyId: string): Promise<void> {

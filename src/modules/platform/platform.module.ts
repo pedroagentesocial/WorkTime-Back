@@ -40,7 +40,7 @@ declare module '#shared/composition/container.js' {
     resetCompanyAdminPassword: ResetCompanyAdminPasswordUseCase;
 
     platformAdminRepository: PlatformAdminRepository;
-    // Solo lo usa el comando de consola admin:recover
+    // Sin ruta HTTP: lo usa el comando de terminal admin:recover
     recoverPlatformAdmin: RecoverPlatformAdminUseCase;
 
     multiAdminRepository: MultiAdminRepository;

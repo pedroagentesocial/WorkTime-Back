@@ -17,6 +17,8 @@ interface Deps {
 
 const TEXT_KEYS = [
   'timeEntryId',
+  'checkInId',
+  'checkedInAt',
   'reason',
   'clockInAt',
   'previousClockInAt',

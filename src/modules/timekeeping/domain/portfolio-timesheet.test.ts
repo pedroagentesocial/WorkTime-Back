@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { CompanyTimesheet } from './company-timesheet.js';
 import { payPeriodOf } from './pay-period.js';
-import { mergeCompanyTimesheets, portfolioPeriodDate, sumHours } from './portfolio-timesheet.js';
+import {
+  mergeCompanyTimesheets,
+  portfolioPeriodDate,
+  sumHours,
+  totalsByCurrency,
+} from './portfolio-timesheet.js';
 
 const period = payPeriodOf('2026-10-05');
 const zeros = (n: number) => Array.from({ length: n }, () => 0);
@@ -71,5 +76,22 @@ describe('portfolioPeriodDate', () => {
 
   it('sin zonas usa el dia UTC', () => {
     expect(portfolioPeriodDate(new Date('2026-10-05T12:00:00Z'), [])).toBe('2026-10-05');
+  });
+});
+
+describe('totalsByCurrency', () => {
+  it('suma solo montos de la misma moneda e ignora empresas sin pago', () => {
+    expect(
+      totalsByCurrency([
+        { currency: 'USD', totalCents: 1000 },
+        null,
+        { currency: 'MXN', totalCents: 50_000 },
+        { currency: 'USD', totalCents: 250 },
+      ]),
+    ).toEqual([
+      { currency: 'MXN', totalCents: 50_000 },
+      { currency: 'USD', totalCents: 1250 },
+    ]);
+    expect(totalsByCurrency([])).toEqual([]);
   });
 });

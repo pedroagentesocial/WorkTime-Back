@@ -10,6 +10,7 @@ import {
   createUser,
   DEFAULT_PASSWORD,
   companyIdentifiers,
+  CLOCK_IN_LOCATION,
 } from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
@@ -71,7 +72,7 @@ const get = async (app: Express, as: As, path: string) =>
     .get(api(path))
     .set(await as());
 
-const clockIn = (app: Express, as: As) => send('post', app, as, '/me/clock-in');
+const clockIn = (app: Express, as: As) => send('post', app, as, '/me/clock-in', CLOCK_IN_LOCATION);
 const clockOut = (app: Express, as: As, dailyReport?: string) =>
   send('post', app, as, '/me/clock-out', dailyReport === undefined ? undefined : { dailyReport });
 

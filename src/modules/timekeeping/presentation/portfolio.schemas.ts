@@ -1,14 +1,18 @@
 import { paginationQuery, uuidSchema } from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
+import type { PortfolioLive } from '../application/portfolio-live.use-case.js';
 import type { PortfolioSummary } from '../application/portfolio-summary.use-case.js';
 import type { PortfolioDailyReportView } from '../application/ports/portfolio-daily-report.reader.js';
 import { toDecimalHours } from '../domain/work-hours.js';
 import {
+  attendanceMapQuery,
   employeeSummarySchema,
   searchParam,
   timesheetQuery,
   weekdaySchema,
   workDate,
+  zoneDto,
+  zoneSchema,
 } from './timekeeping.schemas.js';
 
 const companyId = uuidSchema.optional().openapi({
@@ -19,6 +23,10 @@ const companyId = uuidSchema.optional().openapi({
 const companyRefSchema = z.object({ id: z.uuid(), name: z.string(), code: z.string() });
 
 export const portfolioSummaryQuery = z.object({ companyId });
+
+export const portfolioLiveQuery = z.object({ companyId });
+
+export const portfolioAttendanceMapQuery = attendanceMapQuery.extend({ companyId });
 
 export const portfolioTimesheetQuery = paginationQuery.extend({
   date: timesheetQuery.shape.date,
@@ -143,6 +151,41 @@ export const portfolioDailyReportSchema = z
     updatedAt: z.iso.datetime(),
   })
   .openapi('PortfolioDailyReport');
+
+export const portfolioLiveSchema = z
+  .object({
+    asOf: z.iso.datetime(),
+    working: z.number().int(),
+    entries: z.array(
+      z.object({
+        company: companyRefSchema,
+        employee: employeeSummarySchema,
+        timezone: z.string(),
+        clockedInAt: z.iso.datetime(),
+        elapsedSeconds: z.number().int(),
+        clockInLocation: z
+          .object({ latitude: z.number(), longitude: z.number(), accuracyMeters: z.number() })
+          .or(z.null())
+          .openapi({ description: 'Dónde marcó la entrada; null si la registró un admin' }),
+        clockInZone: zoneSchema.or(z.null()).openapi({
+          description: 'Si cayó dentro o fuera de una zona de trabajo; null si no aplica',
+        }),
+      }),
+    ),
+  })
+  .openapi('PortfolioLive');
+
+export function toPortfolioLiveDto(live: PortfolioLive) {
+  return {
+    asOf: live.asOf.toISOString(),
+    working: live.working,
+    entries: live.entries.map((entry) => ({
+      ...entry,
+      clockedInAt: entry.clockedInAt.toISOString(),
+      clockInZone: zoneDto(entry.clockInZone),
+    })),
+  };
+}
 
 export function toPortfolioDailyReportDto(report: PortfolioDailyReportView) {
   return {

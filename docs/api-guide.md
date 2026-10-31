@@ -351,6 +351,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 | `time_entries.correct`       |              |        sí        |         sí         |          |
 | `attendance.clock_employees` |              |        sí        |         sí         |          |
 | `periods.manage`             |              |        sí        |         sí         |          |
+| `pay.manage`                 |              |        sí        |         sí         |          |
 | `attendance.clock_own`       |              |                  |                    |    sí    |
 | `attendance.read_own`        |              |                  |                    |    sí    |
 
@@ -388,6 +389,13 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 - **El admin sí puede marcarle la entrada** a un empleado con pendientes.
 - Los reportes se pueden seguir escribiendo aunque el periodo esté cerrado.
 
+### Correcciones del propio empleado
+
+- El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), con un último día opcional (`selfEditUntil`). Sin fecha, dura hasta que lo quite.
+- Con el permiso, `PATCH /me/time-entries/{id}` cambia la entrada o la salida de un marcaje suyo, también para poner la salida que olvidó un día anterior. El motivo es obligatorio.
+- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
+- `GET /me/clock-status` trae `selfEdit` (días y vencimiento; `null` si hoy no puede). Cada cambio queda en el historial del marcaje y en la actividad del admin como `time_entry.corrected_by_employee`, que nunca se purga.
+
 ### Correcciones, registros manuales y anulaciones (admin)
 
 | Acción                                  | Endpoint                                               | Reglas                                                                                                              |
@@ -407,6 +415,17 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 - `POST /company/periods/close` es **definitivo**: no existe reapertura. Solo se cierra un periodo que **ya terminó en todo el mundo**, y **sin entradas abiertas** (`PERIOD_HAS_OPEN_ENTRIES` lista cuáles). Los reportes pendientes avisan, pero no impiden cerrar.
 - Después de cerrar, **no se puede corregir, crear, anular ni marcar** nada en esos días (`409 PERIOD_CLOSED`). Si hay un error, se corrige por fuera del sistema (por ejemplo, pagando la diferencia en el siguiente pago).
 - La API guarda el total de horas al cerrar, para poder compararlo con lo exportado.
+- Al cerrar también **congela lo que se paga a cada empleado** y la moneda de la empresa: si después cambia la moneda o se reactiva a alguien, el periodo cerrado sigue mostrando lo mismo.
+
+### Sueldos y pago del periodo
+
+- Cada empleado tiene un **historial de sueldo**: cada cambio rige desde su `effectiveFrom` hasta el siguiente. Hay dos tipos: `hourly` (tarifa por hora) y `salary` (sueldo fijo de cada periodo de 14 días). Montos en **centavos** enteros de la moneda de la empresa (`currency` en `PATCH /company`, código ISO de 3 letras, por defecto `USD`).
+- **Por hora:** horas de cada día × la tarifa de ese día. **Sueldo fijo:** se reparte entre los 14 días del periodo y solo cuenta los días desde que rige hasta el último día activo; el día de la baja cuenta. No hay horas extra, impuestos ni descuentos. Se redondea a centavos una sola vez por empleado.
+- Un cambio a mitad del periodo solo afecta desde su fecha. Para aplicarlo a **todo el periodo en curso**, manda como `effectiveFrom` el primer día del periodo. Dos cambios con la misma fecha: el segundo reemplaza al primero.
+- Nunca puede regir en un día de un periodo cerrado (`409 PAY_RATE_IN_CLOSED_PERIOD`). Cada cambio queda en la auditoría (`employee.pay_rate_changed`) y nunca se purga.
+- Un cambio equivocado se quita con `DELETE /company/employees/{id}/pay-rates/{rateId}`, salvo que rija en un periodo cerrado (`locked: true` en el historial, `409 PAY_RATE_IN_CLOSED_PERIOD`). Queda en la auditoría como `employee.pay_rate_removed`, con el monto que tenía.
+- **Bajas:** al desactivar, `effectiveOn` es el último día que se le paga; al reactivar, el primero (por defecto hoy en la zona del empleado). Los días de en medio no cuentan para el sueldo fijo. No puede ser futuro ni caer en un periodo cerrado (`400 INVALID_STATUS_DATE`, `409 STATUS_DATE_IN_CLOSED_PERIOD`). El acceso a la app cambia al momento. El historial de sueldo trae `inactiveSpans` con cada baja.
+- Solo los admins (de empresa y multiempresa) ven sueldos. El empleado y el admin global, no.
 
 ### Zonas horarias
 
@@ -418,7 +437,7 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 
 - Una empresa no puede tener más empleados **activos** que su límite contratado (`409 EMPLOYEE_LIMIT_REACHED`).
 - **Desactivar** a un empleado cierra su sesión y su entrada abierta. Un empleado desactivado puede volver a activarse y deja de contar para el tope de empleados.
-- **Eliminar** (`DELETE /company/employees/{id}`) solo es posible si el empleado **nunca registró horas ni reportes** (por ejemplo un alta por error): borra su cuenta y su historial de accesos y libera su correo; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY` y lo correcto es desactivarlo. Queda un evento `employee.deleted` en la auditoría.
+- **Eliminar** (`DELETE /company/employees/{id}`) solo es posible si el empleado **nunca registró horas, reportes, check-ins ni tuvo pagos en un periodo cerrado** (por ejemplo un alta por error): borra su cuenta y su historial de accesos y libera su correo; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY` y lo correcto es desactivarlo. Queda un evento `employee.deleted` en la auditoría.
 - El email del empleado es su identidad de acceso y **no se edita**.
 - El teléfono es opcional y solo informativo.
 
@@ -439,16 +458,43 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 | `pendingReports`                | Fechas de reportes que debe escribir        |
 | `dailyLimit`                    | Límite diario y cuánto le queda (o `null`)  |
 | `dailyReport`                   | Si es obligatorio y el texto ya escrito hoy |
+| `canCheckIn`                    | Si la empresa deja registrar llegadas       |
 
 **El contador en vivo lo dibuja el cliente.** Toma `elapsedSeconds` y `serverTime` en el momento de la respuesta y avanza con su propio reloj; no consultes cada segundo. Si hay límite diario, la cuenta regresiva parte de `dailyLimit.remainingSeconds`. Cuando llegue a cero, vuelve a pedir el estado: el servidor ya cerró la entrada.
 
 ### Marcar entrada
 
-`POST /me/clock-in`. Si responde `409`:
+`POST /me/clock-in`. **Hay que mandar la ubicación del dispositivo** (`latitude`, `longitude` y `accuracyMeters`, en metros); sin ella responde `400 LOCATION_REQUIRED` y no se marca. Un valor fuera de rango responde `400 INVALID_LOCATION`. Una precisión baja no impide marcar: solo se guarda. La ubicación se captura **solo al marcar la entrada**, nunca de forma continua, y el navegador solo la entrega en páginas seguras (HTTPS o `localhost`). La salida no pide ubicación.
 
+Si el empleado niega el permiso o su aparato no tiene ubicación, el admin puede marcar la entrada por él (`POST /company/employees/{id}/clock-in`) o registrar la jornada a mano; esos registros no llevan ubicación (`clockInLocation: null`).
+
+#### Mapa de marcajes
+
+`GET /company/attendance/map` devuelve dónde marcó la entrada cada empleado en un rango de días laborales (`from`, `to`, opcional `employeeId`): los marcajes con ubicación y no anulados, los más recientes primero, con `open`, `clockInLocation` y `clockInZone`. Devuelve hasta 500 puntos y `truncated: true` avisa si había más. El admin multiempresa tiene `GET /portfolio/attendance/map`, igual pero sobre todas sus empresas activas, con `companyId` para acotar a una suya (404 si no lo es). Los marcajes registrados por un admin no tienen ubicación y no salen.
+
+#### Zonas de trabajo
+
+El admin define zonas (círculos con centro y radio de 10 a 60000 m) en `GET/POST /company/work-sites` y `PATCH /company/work-sites/{id}`; una zona se desactiva, no se borra. Con al menos una zona activa, cada marcaje guarda `clockInZone`: `inside` o `outside`, con la zona más cercana y la distancia en metros. Se cuenta como dentro si la distancia es menor o igual al radio más la precisión del dispositivo, para no castigar un GPS impreciso. La zona queda guardada en el marcaje: editar o desactivar la zona después no cambia lo ya registrado. Sin zonas, `clockInZone` es `null`.
+
+Por defecto solo se marca el dato. Si la empresa enciende `enforceWorkSites` (`PATCH /company`), marcar la entrada fuera de toda zona responde `409 OUTSIDE_WORK_AREA` con `error.details.siteName` y `distanceMeters`. No se puede encender sin una zona activa, ni desactivar la última mientras esté encendido (`409 WORK_SITES_REQUIRED`). Los marcajes del admin no se evalúan. `GET /company/time-entries` acepta `location=without` (sin ubicación) o `location=outside` (fuera de zona).
+
+Si responde `409`:
+
+- `OUTSIDE_WORK_AREA`: la empresa exige zona y el empleado está fuera.
 - `ALREADY_CLOCKED_IN`: ya tiene una entrada abierta.
 - `DAILY_LIMIT_REACHED`: alcanzó su límite de hoy.
 - `DAILY_REPORT_PENDING`: tiene reportes por escribir (`error.details.dates`). Muestra la lista y deja que los escriba antes.
+
+### Registrar llegada (check-in)
+
+`POST /me/check-ins` deja constancia de que el empleado llegó a un lugar: guarda la hora del servidor, la ubicación (`latitude`, `longitude` y `accuracyMeters`, obligatorias, igual que al marcar entrada) y una `note` opcional de hasta 200 caracteres. **No es un marcaje:** no abre ni cierra la jornada, no cuenta horas y funciona con o sin la entrada marcada, así que no lo frenan el límite diario, los reportes pendientes ni un periodo cerrado. Sirve, por ejemplo, para que alguien que recorre la ciudad registre cada visita a un cliente.
+
+- La empresa lo activa con `allowCheckIns` (`PATCH /company`) y cada empleado puede tener el suyo (`PATCH /company/employees/{id}` con `allowCheckIns`): `true` lo permite y `false` lo prohíbe aunque la empresa diga lo contrario, `null` hereda la de la empresa. El empleado trae `allowCheckIns` (el propio) y `effectiveAllowCheckIns` (el que aplica). Sin permiso responde `409 CHECK_INS_DISABLED`. `GET /me/clock-status` trae `canCheckIn` para mostrar u ocultar el botón. Quitar el permiso no borra ni oculta lo que ya registró.
+- Se guarda si cayó dentro o fuera de la zona de trabajo más cercana (`zone`, como `clockInZone`), pero nunca bloquea, aunque la empresa exija zonas para marcar entrada.
+- Hasta 50 por empleado y día laboral, contando los anulados (`409 CHECK_IN_LIMIT_REACHED`).
+- `GET /me/check-ins?from=&to=` lista los propios; los anulados no aparecen.
+
+El admin los ve en `GET /company/check-ins` (filtros `employeeId`, `from`/`to`, `location=outside` y `status=voided`) y anula uno registrado por error con `POST /company/check-ins/{id}/void` y un motivo: no se borra, queda con quién lo anuló y por qué, y aparece en la actividad (`check_in.voided_by_admin`). La base de datos impide borrar un check-in o cambiar lo registrado. Un empleado con check-ins ya no se puede eliminar (`EMPLOYEE_HAS_HISTORY`).
 
 ### Marcar salida
 
@@ -477,7 +523,7 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 `GET /company/attendance/summary` da de un vistazo: empleados activos, cuántos están dentro y fuera, horas trabajadas hoy por todos, quiénes alcanzaron su límite y cuántos reportes faltan. Para el detalle:
 
 - `GET /company/attendance/roster` — lista de empleados con su estado `in` u `out` (filtros `status` y `search`). Sirve para la pantalla de "quién está trabajando".
-- `GET /company/attendance/live` — solo los que están trabajando ahora, con su tiempo transcurrido.
+- `GET /company/attendance/live` — solo los que están trabajando ahora, con su tiempo transcurrido y `clockInLocation` (dónde marcaron la entrada), para el mapa. El roster trae `clockedInLocation`.
 - `GET /company/daily-reports/pending` — quién debe qué reportes.
 
 No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segundos** y avanza los contadores en el cliente con `elapsedSeconds`.
@@ -486,22 +532,28 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 - `POST /company/employees` — alta. Devuelve el empleado y su **contraseña temporal (se muestra una sola vez)**. El código de empleado lo asigna el sistema.
 - `GET /company/employees` y `GET /company/employees/{id}` — listado (con `search` por nombre, email o código, y `status`) y detalle.
-- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria y límite diario propio.
-- `PATCH /company/employees/{id}/status` — activar o desactivar.
+- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria, límite diario propio y el permiso para corregir sus horas (`allowSelfEdit`, `selfEditUntil`).
+- `PATCH /company/employees/{id}/status` — activar o desactivar; con `effectiveOn` se elige desde cuándo cuenta para el sueldo fijo (ver Bajas).
 - `DELETE /company/employees/{id}` — eliminar a un empleado sin historial (ver arriba).
 - `POST /company/employees/{id}/reset-password` — nueva contraseña temporal.
 - `POST /company/employees/{id}/revoke-sessions` — cierra todas sus sesiones.
+- `GET /company/employees/{id}/pay-rates` — su historial de sueldo y la moneda. `POST` con `{ "kind", "amountCents", "effectiveFrom" }` agrega un cambio. Al guardar, pregunta si rige **desde una fecha** (por defecto hoy) o **en todo el periodo en curso** (su primer día).
 
 ### Marcajes
 
-- `GET /company/time-entries` — listado con filtros por empleado, rango de días (`from`, `to`) y estado (`open`, `closed`, `voided`), con `meta.totalHours`.
+- `GET /company/time-entries` — listado con filtros por empleado, rango de días (`from`, `to`) y estado (`open`, `closed`, `voided`), con `meta.totalHours`. Cada marcaje trae `clockInLocation` (`null` si lo registró un admin o es anterior a este dato).
 - `GET /company/time-entries/{id}` y `GET /company/time-entries/{id}/corrections` — detalle e historial de correcciones.
 - Para corregir, crear o anular: ver la tabla de la sección 6.
 - Para marcar por un empleado: `POST /company/employees/{id}/clock-in` y `/clock-out`.
 
 ### Horas del periodo
 
-- `GET /company/timesheet?date=` — tabla de todos los empleados: una fila por empleado y una cifra de horas por día del periodo (`meta.days` da las fechas en el mismo orden), con totales de toda la empresa.
+- `GET /company/timesheet?date=` — tabla de todos los empleados: una fila por empleado y una cifra de horas por día del periodo (`meta.days` da las fechas en el mismo orden), con totales de toda la empresa. Solo horas: el pago está en Nómina.
+
+### Nómina
+
+- `GET /company/payroll?date=` (permiso `pay.manage`) — lo que se paga a cada empleado en el periodo: `pay` con `amountCents`, el sueldo vigente (`rate`) y `salaryDays` (días pagados con sueldo fijo), sus horas y marcajes abiertos. `meta.pay` da la moneda, el total y cuánto es de quienes cobran por hora (`hourlyCents`) y con sueldo fijo (`salaryCents`); `meta.closed`, el cierre. La tabla solo trae a quien tiene monto: los que no tienen sueldo van en `meta.missingPay` y `meta.employeeCount` cuenta a todos. En un periodo cerrado son los montos congelados.
+- `GET /company/payroll/export?date=` — la misma tabla en CSV: tipo, sueldo, horas, días con sueldo fijo y pago, con una fila de total.
 - `GET /company/employees/{id}/timesheet?date=` — la hoja de un empleado.
 - `GET /company/timesheet/export?date=` — la misma tabla de la empresa como **CSV** (UTF-8 con BOM, horas con 2 decimales y una fila de totales). Descárgalo con el token en el encabezado; no se puede abrir con un simple enlace.
 
@@ -519,7 +571,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 ### Ajustes de la empresa
 
-`GET /company` y `PATCH /company`: nombre, zona horaria, límite diario y si el reporte es obligatorio. El código de la empresa se ve aquí y no se puede cambiar. El límite de empleados y el estado de la empresa los define el admin global.
+`GET /company` y `PATCH /company`: nombre, zona horaria, moneda, límite diario y si el reporte es obligatorio. El código de la empresa se ve aquí y no se puede cambiar. El límite de empleados y el estado de la empresa los define el admin global.
 
 ---
 
@@ -555,8 +607,9 @@ Paquetes: una empresa con su admin de empresa es el paquete de una empresa. Para
 **Vistas de todas sus empresas** (solo lectura, no dependen de la empresa activa de la sesión; solo cuentan sus empresas **activas**, las suspendidas quedan fuera):
 
 - `GET /portfolio/summary` es su panel: empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y reportes pendientes, en total y por empresa, más las horas de todos por día del periodo. El periodo no avanza hasta que todas sus empresas terminaron el anterior.
+- `GET /portfolio/attendance/live` lista quién está trabajando ahora en todas sus empresas, con su empresa y `clockInLocation`, para el mapa.
 - `GET /portfolio/employees` lista los empleados de todas sus empresas, con la empresa de cada uno. Filtra por `search`, `status` y `companyId`.
-- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila.
+- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila. `GET /portfolio/payroll` es la nómina de todas sus empresas: cada fila lleva su `currency` (la de su empresa) y `meta.payTotals` da **un total por moneda**, porque los montos de monedas distintas nunca se suman. `GET /portfolio/payroll/export` la baja en CSV con una fila de total por moneda.
 - `GET /portfolio/daily-reports` lista los reportes de todas sus empresas y `GET /portfolio/daily-reports/export` los baja en CSV, también con la empresa. Con más de 5000 reportes hay que acotar el rango.
 - Todas aceptan `companyId` para acotar a una empresa; una que no es suya responde `404 COMPANY_NOT_FOUND`, igual que una inexistente o suspendida.
 - No puede cambiar el límite de empleados de una empresa, suspenderla ni cambiar su propio paquete: eso es solo del admin global.
@@ -583,7 +636,10 @@ Decide por `error.code`, no por el texto. Los casos más importantes:
 | `DAILY_REPORT_PENDING`                                                      | 409  | Mostrar `error.details.dates` y dejar escribir los reportes.                                           |
 | `DAILY_REPORT_REQUIRED`                                                     | 400  | Pedir el reporte antes de marcar la salida.                                                            |
 | `DAILY_LIMIT_REACHED`                                                       | 409  | Avisar que ya alcanzó su límite de hoy.                                                                |
+| `CHECK_INS_DISABLED`                                                        | 409  | La empresa no deja registrar llegadas: ocultar el botón (`canCheckIn`).                                |
+| `CHECK_IN_LIMIT_REACHED`                                                    | 409  | Ya registró el máximo de llegadas del día (`error.details.perDay`).                                    |
 | `PERIOD_CLOSED`                                                             | 409  | El periodo está cerrado; ya no admite cambios.                                                         |
+| `PAY_RATE_IN_CLOSED_PERIOD`                                                 | 409  | Elegir un día posterior al último periodo cerrado (lo dice el mensaje).                                |
 | `PERIOD_HAS_OPEN_ENTRIES`                                                   | 409  | Mostrar `error.details.entries` y pedir corregirlas o anularlas.                                       |
 | `TIME_ENTRY_OVERLAP`                                                        | 409  | El horario se cruza con otro registro del empleado.                                                    |
 | `TIME_ENTRY_CHANGED`                                                        | 409  | Alguien cambió el registro mientras lo editabas: recárgalo.                                            |

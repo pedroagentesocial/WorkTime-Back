@@ -14,6 +14,12 @@ export interface EmployeeView {
   readonly effectiveTimezone: string;
   readonly dailyLimitMinutes: number | null;
   readonly effectiveDailyLimitMinutes: number | null;
+  // Propio: null hereda el de la empresa
+  readonly allowCheckIns: boolean | null;
+  readonly effectiveAllowCheckIns: boolean;
+  // Puede corregir sus propias horas; selfEditUntil es el ultimo dia del permiso, null sin vencimiento
+  readonly allowSelfEdit: boolean;
+  readonly selfEditUntil: string | null;
   readonly status: EmployeeStatus;
   readonly mustChangePassword: boolean;
   readonly lastLoginAt: Date | null;
@@ -43,6 +49,9 @@ export interface EmployeePatch {
   readonly hiredAt?: string | null | undefined;
   readonly timezone?: string | null | undefined;
   readonly dailyLimitMinutes?: number | null | undefined;
+  readonly allowCheckIns?: boolean | null | undefined;
+  readonly allowSelfEdit?: boolean | undefined;
+  readonly selfEditUntil?: string | null | undefined;
 }
 
 export interface EmployeeListFilter {

@@ -6,7 +6,9 @@ import { localDateOf } from '#shared/domain/timezone.js';
 import { AppError } from '#shared/domain/errors.js';
 import { remainingSeconds } from '../domain/daily-limit.js';
 import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
+import { ClockLocationRules, type ClockLocation } from '../domain/clock-location.js';
 import { TimeEntry } from '../domain/time-entry.js';
+import { evaluateZone } from '../domain/work-zone.js';
 import { durationSeconds } from '../domain/work-hours.js';
 import {
   closeIfOverLimit,
@@ -20,6 +22,8 @@ import type { PeriodClosureRepository } from './ports/period-closure.repository.
 import type { DailyReportRepository } from './ports/daily-report.repository.js';
 import type { EmployeeDirectory, EmployeeProfile } from './ports/employee-directory.js';
 import type { TimeEntryRepository } from './ports/time-entry.repository.js';
+import type { WorkSiteReader } from './ports/work-site.reader.js';
+import { selfEditActive } from './self-correction.use-case.js';
 import { TimekeepingErrors } from './timekeeping-errors.js';
 
 interface Deps {
@@ -30,6 +34,7 @@ interface Deps {
   dailyReportRepository: DailyReportRepository;
   periodClosureRepository: PeriodClosureRepository;
   transactions: TransactionRunner;
+  workSiteReader: WorkSiteReader;
 }
 
 async function profileOf(directory: EmployeeDirectory, actor: Actor): Promise<EmployeeProfile> {
@@ -38,12 +43,28 @@ async function profileOf(directory: EmployeeDirectory, actor: Actor): Promise<Em
   return profile;
 }
 
-export class ClockInUseCase implements UseCase<Actor, TimeEntry> {
+export interface ClockInInput {
+  readonly actor: Actor;
+  readonly location?: ClockLocation | undefined;
+}
+
+export class ClockInUseCase implements UseCase<ClockInInput, TimeEntry> {
   constructor(private readonly deps: Deps) {}
 
-  async execute(actor: Actor): Promise<TimeEntry> {
+  async execute({ actor, location }: ClockInInput): Promise<TimeEntry> {
     const { timeEntryRepository: entries } = this.deps;
     const profile = await profileOf(this.deps.employeeDirectory, actor);
+    if (!location) throw TimekeepingErrors.locationRequired();
+    const validLocation = ClockLocationRules.assertValid(location);
+
+    // La zona se guarda al marcar: si despues cambian las zonas, este marcaje conserva lo que paso entonces
+    const zone = evaluateZone(
+      validLocation,
+      await this.deps.workSiteReader.listActive(profile.companyId),
+    );
+    if (zone?.status === 'outside' && profile.enforceWorkSites) {
+      throw TimekeepingErrors.outsideWorkArea(zone.siteName, zone.distanceMeters);
+    }
     const now = this.deps.clock.now();
     const limit = profile.dailyLimitMinutes;
 
@@ -71,6 +92,8 @@ export class ClockInUseCase implements UseCase<Actor, TimeEntry> {
       at: now,
       timezone: profile.effectiveTimezone,
       source: 'web',
+      location: validLocation,
+      zone,
     });
     await this.deps.transactions.run(async () => {
       await assertPeriodsOpen(this.deps.periodClosureRepository, profile.companyId, [
@@ -147,6 +170,9 @@ export interface ClockStatus {
   };
   readonly pendingReports: string[];
   readonly canClockIn: boolean;
+  readonly canCheckIn: boolean;
+  // null si hoy no tiene permiso para corregir sus horas
+  readonly selfEdit: { readonly days: number; readonly until: string | null } | null;
 }
 
 export class GetClockStatusUseCase implements UseCase<Actor, ClockStatus> {
@@ -188,6 +214,10 @@ export class GetClockStatusUseCase implements UseCase<Actor, ClockStatus> {
       },
       pendingReports,
       canClockIn: openEntry === null && pendingReports.length === 0 && !dailyLimit?.reached,
+      canCheckIn: profile.allowCheckIns,
+      selfEdit: selfEditActive(profile, localDateOf(now, profile.effectiveTimezone))
+        ? { days: profile.selfEdit.days, until: profile.selfEdit.until }
+        : null,
     };
   }
 }

@@ -352,6 +352,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 | `time_entries.correct`       |              |        sí        |         sí         |          |
 | `attendance.clock_employees` |              |        sí        |         sí         |          |
 | `periods.manage`             |              |        sí        |         sí         |          |
+| `pay.manage`                 |              |        sí        |         sí         |          |
 | `attendance.clock_own`       |              |                  |                    |    sí    |
 | `attendance.read_own`        |              |                  |                    |    sí    |
 
@@ -389,6 +390,13 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 - **El admin sí puede marcarle la entrada** a un empleado con pendientes.
 - Los reportes se pueden seguir escribiendo aunque el periodo esté cerrado.
 
+### Correcciones del propio empleado
+
+- El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), con un último día opcional (`selfEditUntil`). Sin fecha, dura hasta que lo quite.
+- Con el permiso, `PATCH /me/time-entries/{id}` cambia la entrada o la salida de un marcaje suyo, también para poner la salida que olvidó un día anterior. El motivo es obligatorio.
+- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
+- `GET /me/clock-status` trae `selfEdit` (días y vencimiento; `null` si hoy no puede). Cada cambio queda en el historial del marcaje y en la actividad del admin como `time_entry.corrected_by_employee`, que nunca se purga.
+
 ### Correcciones, registros manuales y anulaciones (admin)
 
 | Acción                                  | Endpoint                                               | Reglas                                                                                                              |
@@ -408,6 +416,17 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 - `POST /company/periods/close` es **definitivo**: no existe reapertura. Solo se cierra un periodo que **ya terminó en todo el mundo**, y **sin entradas abiertas** (`PERIOD_HAS_OPEN_ENTRIES` lista cuáles). Los reportes pendientes avisan, pero no impiden cerrar.
 - Después de cerrar, **no se puede corregir, crear, anular ni marcar** nada en esos días (`409 PERIOD_CLOSED`). Si hay un error, se corrige por fuera del sistema (por ejemplo, pagando la diferencia en el siguiente pago).
 - La API guarda el total de horas al cerrar, para poder compararlo con lo exportado.
+- Al cerrar también **congela lo que se paga a cada empleado** y la moneda de la empresa: si después cambia la moneda o se reactiva a alguien, el periodo cerrado sigue mostrando lo mismo.
+
+### Sueldos y pago del periodo
+
+- Cada empleado tiene un **historial de sueldo**: cada cambio rige desde su `effectiveFrom` hasta el siguiente. Hay dos tipos: `hourly` (tarifa por hora) y `salary` (sueldo fijo de cada periodo de 14 días). Montos en **centavos** enteros de la moneda de la empresa (`currency` en `PATCH /company`, código ISO de 3 letras, por defecto `USD`).
+- **Por hora:** horas de cada día × la tarifa de ese día. **Sueldo fijo:** se reparte entre los 14 días del periodo y solo cuenta los días desde que rige hasta el último día activo; el día de la baja cuenta. No hay horas extra, impuestos ni descuentos. Se redondea a centavos una sola vez por empleado.
+- Un cambio a mitad del periodo solo afecta desde su fecha. Para aplicarlo a **todo el periodo en curso**, manda como `effectiveFrom` el primer día del periodo. Dos cambios con la misma fecha: el segundo reemplaza al primero.
+- Nunca puede regir en un día de un periodo cerrado (`409 PAY_RATE_IN_CLOSED_PERIOD`). Cada cambio queda en la auditoría (`employee.pay_rate_changed`) y nunca se purga.
+- Un cambio equivocado se quita con `DELETE /company/employees/{id}/pay-rates/{rateId}`, salvo que rija en un periodo cerrado (`locked: true` en el historial, `409 PAY_RATE_IN_CLOSED_PERIOD`). Queda en la auditoría como `employee.pay_rate_removed`, con el monto que tenía.
+- **Bajas:** al desactivar, `effectiveOn` es el último día que se le paga; al reactivar, el primero (por defecto hoy en la zona del empleado). Los días de en medio no cuentan para el sueldo fijo. No puede ser futuro ni caer en un periodo cerrado (`400 INVALID_STATUS_DATE`, `409 STATUS_DATE_IN_CLOSED_PERIOD`). El acceso a la app cambia al momento. El historial de sueldo trae `inactiveSpans` con cada baja.
+- Solo los admins (de empresa y multiempresa) ven sueldos. El empleado y el admin global, no.
 
 ### Zonas horarias
 
@@ -419,7 +438,7 @@ Todo esto queda en `GET /company/activity` (quién hizo qué, a quién y por qu�
 
 - Una empresa no puede tener más empleados **activos** que su límite contratado (`409 EMPLOYEE_LIMIT_REACHED`).
 - **Desactivar** a un empleado cierra su sesión y su entrada abierta. Un empleado desactivado puede volver a activarse y deja de contar para el tope de empleados.
-- **Eliminar** (`DELETE /company/employees/{id}`) solo es posible si el empleado **nunca registró horas ni reportes** (por ejemplo un alta por error): borra su cuenta y su historial de accesos y libera su correo; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY` y lo correcto es desactivarlo. Queda un evento `employee.deleted` en la auditoría.
+- **Eliminar** (`DELETE /company/employees/{id}`) solo es posible si el empleado **nunca registró horas, reportes, check-ins ni tuvo pagos en un periodo cerrado** (por ejemplo un alta por error): borra su cuenta y su historial de accesos y libera su correo; su código no se reutiliza. Con historial responde `409 EMPLOYEE_HAS_HISTORY` y lo correcto es desactivarlo. Queda un evento `employee.deleted` en la auditoría.
 - El email del empleado es su identidad de acceso y **no se edita**.
 - El teléfono es opcional y solo informativo.
 
@@ -440,16 +459,43 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 | `pendingReports`                | Fechas de reportes que debe escribir        |
 | `dailyLimit`                    | Límite diario y cuánto le queda (o `null`)  |
 | `dailyReport`                   | Si es obligatorio y el texto ya escrito hoy |
+| `canCheckIn`                    | Si la empresa deja registrar llegadas       |
 
 **El contador en vivo lo dibuja el cliente.** Toma `elapsedSeconds` y `serverTime` en el momento de la respuesta y avanza con su propio reloj; no consultes cada segundo. Si hay límite diario, la cuenta regresiva parte de `dailyLimit.remainingSeconds`. Cuando llegue a cero, vuelve a pedir el estado: el servidor ya cerró la entrada.
 
 ### Marcar entrada
 
-`POST /me/clock-in`. Si responde `409`:
+`POST /me/clock-in`. **Hay que mandar la ubicación del dispositivo** (`latitude`, `longitude` y `accuracyMeters`, en metros); sin ella responde `400 LOCATION_REQUIRED` y no se marca. Un valor fuera de rango responde `400 INVALID_LOCATION`. Una precisión baja no impide marcar: solo se guarda. La ubicación se captura **solo al marcar la entrada**, nunca de forma continua, y el navegador solo la entrega en páginas seguras (HTTPS o `localhost`). La salida no pide ubicación.
 
+Si el empleado niega el permiso o su aparato no tiene ubicación, el admin puede marcar la entrada por él (`POST /company/employees/{id}/clock-in`) o registrar la jornada a mano; esos registros no llevan ubicación (`clockInLocation: null`).
+
+#### Mapa de marcajes
+
+`GET /company/attendance/map` devuelve dónde marcó la entrada cada empleado en un rango de días laborales (`from`, `to`, opcional `employeeId`): los marcajes con ubicación y no anulados, los más recientes primero, con `open`, `clockInLocation` y `clockInZone`. Devuelve hasta 500 puntos y `truncated: true` avisa si había más. El admin multiempresa tiene `GET /portfolio/attendance/map`, igual pero sobre todas sus empresas activas, con `companyId` para acotar a una suya (404 si no lo es). Los marcajes registrados por un admin no tienen ubicación y no salen.
+
+#### Zonas de trabajo
+
+El admin define zonas (círculos con centro y radio de 10 a 60000 m) en `GET/POST /company/work-sites` y `PATCH /company/work-sites/{id}`; una zona se desactiva, no se borra. Con al menos una zona activa, cada marcaje guarda `clockInZone`: `inside` o `outside`, con la zona más cercana y la distancia en metros. Se cuenta como dentro si la distancia es menor o igual al radio más la precisión del dispositivo, para no castigar un GPS impreciso. La zona queda guardada en el marcaje: editar o desactivar la zona después no cambia lo ya registrado. Sin zonas, `clockInZone` es `null`.
+
+Por defecto solo se marca el dato. Si la empresa enciende `enforceWorkSites` (`PATCH /company`), marcar la entrada fuera de toda zona responde `409 OUTSIDE_WORK_AREA` con `error.details.siteName` y `distanceMeters`. No se puede encender sin una zona activa, ni desactivar la última mientras esté encendido (`409 WORK_SITES_REQUIRED`). Los marcajes del admin no se evalúan. `GET /company/time-entries` acepta `location=without` (sin ubicación) o `location=outside` (fuera de zona).
+
+Si responde `409`:
+
+- `OUTSIDE_WORK_AREA`: la empresa exige zona y el empleado está fuera.
 - `ALREADY_CLOCKED_IN`: ya tiene una entrada abierta.
 - `DAILY_LIMIT_REACHED`: alcanzó su límite de hoy.
 - `DAILY_REPORT_PENDING`: tiene reportes por escribir (`error.details.dates`). Muestra la lista y deja que los escriba antes.
+
+### Registrar llegada (check-in)
+
+`POST /me/check-ins` deja constancia de que el empleado llegó a un lugar: guarda la hora del servidor, la ubicación (`latitude`, `longitude` y `accuracyMeters`, obligatorias, igual que al marcar entrada) y una `note` opcional de hasta 200 caracteres. **No es un marcaje:** no abre ni cierra la jornada, no cuenta horas y funciona con o sin la entrada marcada, así que no lo frenan el límite diario, los reportes pendientes ni un periodo cerrado. Sirve, por ejemplo, para que alguien que recorre la ciudad registre cada visita a un cliente.
+
+- La empresa lo activa con `allowCheckIns` (`PATCH /company`) y cada empleado puede tener el suyo (`PATCH /company/employees/{id}` con `allowCheckIns`): `true` lo permite y `false` lo prohíbe aunque la empresa diga lo contrario, `null` hereda la de la empresa. El empleado trae `allowCheckIns` (el propio) y `effectiveAllowCheckIns` (el que aplica). Sin permiso responde `409 CHECK_INS_DISABLED`. `GET /me/clock-status` trae `canCheckIn` para mostrar u ocultar el botón. Quitar el permiso no borra ni oculta lo que ya registró.
+- Se guarda si cayó dentro o fuera de la zona de trabajo más cercana (`zone`, como `clockInZone`), pero nunca bloquea, aunque la empresa exija zonas para marcar entrada.
+- Hasta 50 por empleado y día laboral, contando los anulados (`409 CHECK_IN_LIMIT_REACHED`).
+- `GET /me/check-ins?from=&to=` lista los propios; los anulados no aparecen.
+
+El admin los ve en `GET /company/check-ins` (filtros `employeeId`, `from`/`to`, `location=outside` y `status=voided`) y anula uno registrado por error con `POST /company/check-ins/{id}/void` y un motivo: no se borra, queda con quién lo anuló y por qué, y aparece en la actividad (`check_in.voided_by_admin`). La base de datos impide borrar un check-in o cambiar lo registrado. Un empleado con check-ins ya no se puede eliminar (`EMPLOYEE_HAS_HISTORY`).
 
 ### Marcar salida
 
@@ -478,7 +524,7 @@ Llama a `GET /me/clock-status`. Trae todo lo necesario para dibujarla:
 `GET /company/attendance/summary` da de un vistazo: empleados activos, cuántos están dentro y fuera, horas trabajadas hoy por todos, quiénes alcanzaron su límite y cuántos reportes faltan. Para el detalle:
 
 - `GET /company/attendance/roster` — lista de empleados con su estado `in` u `out` (filtros `status` y `search`). Sirve para la pantalla de "quién está trabajando".
-- `GET /company/attendance/live` — solo los que están trabajando ahora, con su tiempo transcurrido.
+- `GET /company/attendance/live` — solo los que están trabajando ahora, con su tiempo transcurrido y `clockInLocation` (dónde marcaron la entrada), para el mapa. El roster trae `clockedInLocation`.
 - `GET /company/daily-reports/pending` — quién debe qué reportes.
 
 No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segundos** y avanza los contadores en el cliente con `elapsedSeconds`.
@@ -487,22 +533,28 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 - `POST /company/employees` — alta. Devuelve el empleado y su **contraseña temporal (se muestra una sola vez)**. El código de empleado lo asigna el sistema.
 - `GET /company/employees` y `GET /company/employees/{id}` — listado (con `search` por nombre, email o código, y `status`) y detalle.
-- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria y límite diario propio.
-- `PATCH /company/employees/{id}/status` — activar o desactivar.
+- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria, límite diario propio y el permiso para corregir sus horas (`allowSelfEdit`, `selfEditUntil`).
+- `PATCH /company/employees/{id}/status` — activar o desactivar; con `effectiveOn` se elige desde cuándo cuenta para el sueldo fijo (ver Bajas).
 - `DELETE /company/employees/{id}` — eliminar a un empleado sin historial (ver arriba).
 - `POST /company/employees/{id}/reset-password` — nueva contraseña temporal.
 - `POST /company/employees/{id}/revoke-sessions` — cierra todas sus sesiones.
+- `GET /company/employees/{id}/pay-rates` — su historial de sueldo y la moneda. `POST` con `{ "kind", "amountCents", "effectiveFrom" }` agrega un cambio. Al guardar, pregunta si rige **desde una fecha** (por defecto hoy) o **en todo el periodo en curso** (su primer día).
 
 ### Marcajes
 
-- `GET /company/time-entries` — listado con filtros por empleado, rango de días (`from`, `to`) y estado (`open`, `closed`, `voided`), con `meta.totalHours`.
+- `GET /company/time-entries` — listado con filtros por empleado, rango de días (`from`, `to`) y estado (`open`, `closed`, `voided`), con `meta.totalHours`. Cada marcaje trae `clockInLocation` (`null` si lo registró un admin o es anterior a este dato).
 - `GET /company/time-entries/{id}` y `GET /company/time-entries/{id}/corrections` — detalle e historial de correcciones.
 - Para corregir, crear o anular: ver la tabla de la sección 6.
 - Para marcar por un empleado: `POST /company/employees/{id}/clock-in` y `/clock-out`.
 
 ### Horas del periodo
 
-- `GET /company/timesheet?date=` — tabla de todos los empleados: una fila por empleado y una cifra de horas por día del periodo (`meta.days` da las fechas en el mismo orden), con totales de toda la empresa.
+- `GET /company/timesheet?date=` — tabla de todos los empleados: una fila por empleado y una cifra de horas por día del periodo (`meta.days` da las fechas en el mismo orden), con totales de toda la empresa. Solo horas: el pago está en Nómina.
+
+### Nómina
+
+- `GET /company/payroll?date=` (permiso `pay.manage`) — lo que se paga a cada empleado en el periodo: `pay` con `amountCents`, el sueldo vigente (`rate`) y `salaryDays` (días pagados con sueldo fijo), sus horas y marcajes abiertos. `meta.pay` da la moneda, el total y cuánto es de quienes cobran por hora (`hourlyCents`) y con sueldo fijo (`salaryCents`); `meta.closed`, el cierre. La tabla solo trae a quien tiene monto: los que no tienen sueldo van en `meta.missingPay` y `meta.employeeCount` cuenta a todos. En un periodo cerrado son los montos congelados.
+- `GET /company/payroll/export?date=` — la misma tabla en CSV: tipo, sueldo, horas, días con sueldo fijo y pago, con una fila de total.
 - `GET /company/employees/{id}/timesheet?date=` — la hoja de un empleado.
 - `GET /company/timesheet/export?date=` — la misma tabla de la empresa como **CSV** (UTF-8 con BOM, horas con 2 decimales y una fila de totales). Descárgalo con el token en el encabezado; no se puede abrir con un simple enlace.
 
@@ -520,7 +572,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 ### Ajustes de la empresa
 
-`GET /company` y `PATCH /company`: nombre, zona horaria, límite diario y si el reporte es obligatorio. El código de la empresa se ve aquí y no se puede cambiar. El límite de empleados y el estado de la empresa los define el admin global.
+`GET /company` y `PATCH /company`: nombre, zona horaria, moneda, límite diario y si el reporte es obligatorio. El código de la empresa se ve aquí y no se puede cambiar. El límite de empleados y el estado de la empresa los define el admin global.
 
 ---
 
@@ -556,8 +608,9 @@ Paquetes: una empresa con su admin de empresa es el paquete de una empresa. Para
 **Vistas de todas sus empresas** (solo lectura, no dependen de la empresa activa de la sesión; solo cuentan sus empresas **activas**, las suspendidas quedan fuera):
 
 - `GET /portfolio/summary` es su panel: empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y reportes pendientes, en total y por empresa, más las horas de todos por día del periodo. El periodo no avanza hasta que todas sus empresas terminaron el anterior.
+- `GET /portfolio/attendance/live` lista quién está trabajando ahora en todas sus empresas, con su empresa y `clockInLocation`, para el mapa.
 - `GET /portfolio/employees` lista los empleados de todas sus empresas, con la empresa de cada uno. Filtra por `search`, `status` y `companyId`.
-- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila.
+- `GET /portfolio/timesheet` es la hoja de horas de todos los empleados, con su empresa, y `GET /portfolio/timesheet/export` la baja en CSV con la empresa y su código al inicio de cada fila. `GET /portfolio/payroll` es la nómina de todas sus empresas: cada fila lleva su `currency` (la de su empresa) y `meta.payTotals` da **un total por moneda**, porque los montos de monedas distintas nunca se suman. `GET /portfolio/payroll/export` la baja en CSV con una fila de total por moneda.
 - `GET /portfolio/daily-reports` lista los reportes de todas sus empresas y `GET /portfolio/daily-reports/export` los baja en CSV, también con la empresa. Con más de 5000 reportes hay que acotar el rango.
 - Todas aceptan `companyId` para acotar a una empresa; una que no es suya responde `404 COMPANY_NOT_FOUND`, igual que una inexistente o suspendida.
 - No puede cambiar el límite de empleados de una empresa, suspenderla ni cambiar su propio paquete: eso es solo del admin global.
@@ -584,7 +637,10 @@ Decide por `error.code`, no por el texto. Los casos más importantes:
 | `DAILY_REPORT_PENDING`                                                      | 409  | Mostrar `error.details.dates` y dejar escribir los reportes.                                           |
 | `DAILY_REPORT_REQUIRED`                                                     | 400  | Pedir el reporte antes de marcar la salida.                                                            |
 | `DAILY_LIMIT_REACHED`                                                       | 409  | Avisar que ya alcanzó su límite de hoy.                                                                |
+| `CHECK_INS_DISABLED`                                                        | 409  | La empresa no deja registrar llegadas: ocultar el botón (`canCheckIn`).                                |
+| `CHECK_IN_LIMIT_REACHED`                                                    | 409  | Ya registró el máximo de llegadas del día (`error.details.perDay`).                                    |
 | `PERIOD_CLOSED`                                                             | 409  | El periodo está cerrado; ya no admite cambios.                                                         |
+| `PAY_RATE_IN_CLOSED_PERIOD`                                                 | 409  | Elegir un día posterior al último periodo cerrado (lo dice el mensaje).                                |
 | `PERIOD_HAS_OPEN_ENTRIES`                                                   | 409  | Mostrar `error.details.entries` y pedir corregirlas o anularlas.                                       |
 | `TIME_ENTRY_OVERLAP`                                                        | 409  | El horario se cruza con otro registro del empleado.                                                    |
 | `TIME_ENTRY_CHANGED`                                                        | 409  | Alguien cambió el registro mientras lo editabas: recárgalo.                                            |
@@ -677,6 +733,9 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 
 - [`GET /company`](#op-get-company) — Datos de mi empresa
 - [`PATCH /company`](#op-patch-company) — Editar mi empresa
+- [`GET /company/work-sites`](#op-get-company-work-sites) — Zonas de trabajo de mi empresa
+- [`POST /company/work-sites`](#op-post-company-work-sites) — Crear una zona de trabajo
+- [`PATCH /company/work-sites/{id}`](#op-patch-company-work-sites-id) — Editar o desactivar una zona de trabajo
 
 **Empresa · Empleados**
 
@@ -686,6 +745,9 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`PATCH /company/employees/{id}`](#op-patch-company-employees-id) — Editar un empleado
 - [`DELETE /company/employees/{id}`](#op-delete-company-employees-id) — Eliminar un empleado
 - [`PATCH /company/employees/{id}/status`](#op-patch-company-employees-id-status) — Activar o desactivar un empleado
+- [`GET /company/employees/{id}/pay-rates`](#op-get-company-employees-id-pay-rates) — Sueldo de un empleado
+- [`POST /company/employees/{id}/pay-rates`](#op-post-company-employees-id-pay-rates) — Cambiar el sueldo de un empleado
+- [`DELETE /company/employees/{id}/pay-rates/{rateId}`](#op-delete-company-employees-id-pay-rates-rateid) — Quitar un cambio de sueldo
 - [`POST /company/employees/{id}/revoke-sessions`](#op-post-company-employees-id-revoke-sessions) — Cerrar las sesiones de un empleado
 - [`POST /company/employees/{id}/reset-password`](#op-post-company-employees-id-reset-password) — Restablecer la contraseña de un empleado
 
@@ -693,10 +755,14 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 
 - [`GET /portfolio/employees`](#op-get-portfolio-employees) — Empleados de todas mis empresas
 - [`GET /portfolio/summary`](#op-get-portfolio-summary) — Panel de todas mis empresas
+- [`GET /portfolio/attendance/live`](#op-get-portfolio-attendance-live) — Quién está trabajando ahora en todas mis empresas, y desde dónde
+- [`GET /portfolio/attendance/map`](#op-get-portfolio-attendance-map) — Dónde marcó la entrada cada empleado de todas mis empresas
 - [`GET /portfolio/timesheet`](#op-get-portfolio-timesheet) — Horas de todos mis empleados
 - [`GET /portfolio/timesheet/export`](#op-get-portfolio-timesheet-export) — Exportar las horas de todas mis empresas a CSV
 - [`GET /portfolio/daily-reports`](#op-get-portfolio-daily-reports) — Reportes diarios de todas mis empresas
 - [`GET /portfolio/daily-reports/export`](#op-get-portfolio-daily-reports-export) — Exportar los reportes de todas mis empresas a CSV
+- [`GET /portfolio/payroll`](#op-get-portfolio-payroll) — Nómina de todas mis empresas
+- [`GET /portfolio/payroll/export`](#op-get-portfolio-payroll-export) — Exportar la nómina de todas mis empresas a CSV
 
 **Empleado · Asistencia**
 
@@ -708,6 +774,7 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`GET /me/daily-reports`](#op-get-me-daily-reports) — Mis reportes del día
 - [`GET /me/timesheet`](#op-get-me-timesheet) — Mi hoja de tiempo del periodo
 - [`GET /me/time-entries`](#op-get-me-time-entries) — Mi historial de asistencia
+- [`PATCH /me/time-entries/{id}`](#op-patch-me-time-entries-id) — Corregir mi marcaje
 
 **Empresa · Asistencia**
 
@@ -719,6 +786,7 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`GET /company/daily-reports/{id}/revisions`](#op-get-company-daily-reports-id-revisions) — Versiones anteriores de un reporte
 - [`GET /company/activity`](#op-get-company-activity) — Actividad del admin sobre la asistencia
 - [`GET /company/attendance/summary`](#op-get-company-attendance-summary) — Resumen del día
+- [`GET /company/attendance/map`](#op-get-company-attendance-map) — Dónde marcó la entrada cada empleado
 - [`GET /company/attendance/roster`](#op-get-company-attendance-roster) — Empleados con su estado IN / OUT
 - [`GET /company/attendance/live`](#op-get-company-attendance-live) — Quién está trabajando ahora
 - [`GET /company/employees/{id}/timesheet`](#op-get-company-employees-id-timesheet) — Hoja de tiempo de un empleado
@@ -732,6 +800,21 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`PATCH /company/time-entries/{id}`](#op-patch-company-time-entries-id) — Corregir un registro
 - [`POST /company/time-entries/{id}/void`](#op-post-company-time-entries-id-void) — Anular un registro
 - [`GET /company/time-entries/{id}/corrections`](#op-get-company-time-entries-id-corrections) — Historial de correcciones de un registro
+
+**Empresa · Nómina**
+
+- [`GET /company/payroll`](#op-get-company-payroll) — Nómina del periodo
+- [`GET /company/payroll/export`](#op-get-company-payroll-export) — Exportar la nómina a CSV
+
+**Empleado · Check-ins**
+
+- [`GET /me/check-ins`](#op-get-me-check-ins) — Mis check-ins
+- [`POST /me/check-ins`](#op-post-me-check-ins) — Registrar llegada (check-in)
+
+**Empresa · Check-ins**
+
+- [`GET /company/check-ins`](#op-get-company-check-ins) — Check-ins de los empleados
+- [`POST /company/check-ins/{id}/void`](#op-post-company-check-ins-id-void) — Anular un check-in
 
 ### Detalle de cada endpoint
 
@@ -1511,6 +1594,10 @@ Nombre y zona horaria. El límite de empleados y el estado solo los cambia el ad
 | `name` | texto | no | (2 a 150 caracteres) |
 | `timezone` | texto | no | (1 a 64 caracteres; ej. `"America/Denver"`) |
 | `requireDailyReport` | booleano | no | true obliga al empleado a escribir el reporte de lo que hizo en el día al marcar salida (mínimo 10 caracteres). |
+| `enforceWorkSites` | booleano | no | true exige que los empleados marquen su entrada dentro de una zona de trabajo. Requiere al menos una zona activa. |
+| `allowCheckIns` | booleano | no | true deja que los empleados registren su llegada a un lugar (check-in) sin marcar entrada. No cuenta horas. |
+| `selfEditDays` | entero | no | Cuántos días hacia atrás pueden corregir sus horas los empleados con permiso (1 a 31). Nunca dentro de un periodo cerrado. (de 1 a 31; ej. `7`) |
+| `currency` | texto | no | Moneda en la que cobran los empleados, con el código ISO 4217 de 3 letras (USD, MXN...). Los periodos ya cerrados conservan la suya. (3 a 3 caracteres; ej. `"USD"`) |
 | `dailyLimitMinutes` | entero o null | no | Límite diario para todos los empleados de la empresa. Al alcanzarlo se cierra la entrada abierta y no pueden volver a marcar ese día. `null` = sin límite. (de 1 a 1440; ej. `490`) |
 
 **Respuesta 200:** Empresa actualizada
@@ -1524,6 +1611,95 @@ Nombre y zona horaria. El límite de empleados y el estado solo los cambia el ad
 | 400 | `INVALID_TIMEZONE` · `INVALID_COMPANY_NAME` · `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 409 | `WORK_SITES_REQUIRED` | Exigir zonas sin ninguna zona activa |
+
+<a id="op-get-company-work-sites"></a>
+#### `GET /company/work-sites`
+
+**Zonas de trabajo de mi empresa**
+
+**Acceso:** permiso `company.settings.manage` (admin de empresa, multi_company_admin).
+
+Activas e inactivas, las activas primero.
+
+**Respuesta 200:** Zonas
+
+- `data`: [WorkSite](#schema-worksite)[]
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-post-company-work-sites"></a>
+#### `POST /company/work-sites`
+
+**Crear una zona de trabajo**
+
+**Acceso:** permiso `company.settings.manage` (admin de empresa, multi_company_admin).
+
+Un círculo (centro y radio en metros) donde se espera que el empleado marque su entrada. Al marcar se guarda si cayó dentro o fuera; con `enforceWorkSites` fuera de una zona no deja marcar.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | sí | (1 a 100 caracteres; ej. `"Oficina central"`) |
+| `latitude` | número | sí | (de -90 a 90; ej. `40.7608`) |
+| `longitude` | número | sí | (de -180 a 180; ej. `-111.891`) |
+| `radiusMeters` | entero | sí | Radio de la zona en metros (10 a 60000) (de 10 a 60000; ej. `150`) |
+
+**Respuesta 201:** Zona creada
+
+- `data`: [WorkSite](#schema-worksite)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 409 | `WORK_SITE_LIMIT` | Demasiadas zonas |
+
+<a id="op-patch-company-work-sites-id"></a>
+#### `PATCH /company/work-sites/{id}`
+
+**Editar o desactivar una zona de trabajo**
+
+**Acceso:** permiso `company.settings.manage` (admin de empresa, multi_company_admin).
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | no | (1 a 100 caracteres; ej. `"Oficina central"`) |
+| `latitude` | número | no | (de -90 a 90; ej. `40.7608`) |
+| `longitude` | número | no | (de -180 a 180; ej. `-111.891`) |
+| `radiusMeters` | entero | no | Radio de la zona en metros (10 a 60000) (de 10 a 60000; ej. `150`) |
+| `active` | booleano | no | false desactiva la zona sin borrarla; los marcajes pasados la conservan |
+
+**Respuesta 200:** Zona actualizada
+
+- `data`: [WorkSite](#schema-worksite)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `WORK_SITE_NOT_FOUND` | Zona inexistente |
+| 409 | `WORK_SITES_REQUIRED` | Dejaría a la empresa sin zonas activas con la exigencia encendida |
 
 ### Empresa · Empleados
 
@@ -1650,6 +1826,9 @@ Solo se modifican los campos enviados. `timezone: null` hace que herede la de la
 | `hiredAt` | fecha AAAA-MM-DD o null | no | (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
 | `dailyLimitMinutes` | entero o null | no | Límite diario propio de este empleado. `null` = usa el de la empresa. Tiene prioridad sobre el de la empresa. (de 1 a 1440; ej. `490`) |
+| `allowCheckIns` | booleano o null | no | Registro de llegada (check-in) propio de este empleado. `true` lo permite y `false` lo prohíbe aunque la empresa diga lo contrario; `null` = usa el de la empresa. |
+| `allowSelfEdit` | booleano | no | Permite que el empleado corrija la hora de entrada o salida de sus marcajes de los últimos días (los que diga la empresa), con motivo. Nunca en un periodo cerrado. |
+| `selfEditUntil` | fecha AAAA-MM-DD o null | no | Último día en que puede corregir; `null` = sin vencimiento. (ej. `"2026-11-15"`) |
 
 **Respuesta 200:** Empleado actualizado
 
@@ -1711,6 +1890,7 @@ Desactivar le quita el acceso al instante y conserva su historial. Reactivar req
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `status` | `active` \| `inactive` | sí | — |
+| `effectiveOn` | fecha AAAA-MM-DD | no | Solo para el sueldo fijo. Al desactivar, el último día que se le paga; al reactivar, el primero. Por defecto hoy en la zona del empleado; no puede ser futuro ni caer en un periodo cerrado. El acceso cambia al momento. (ej. `"2026-10-30"`) |
 
 **Respuesta 200:** Estado actualizado
 
@@ -1720,11 +1900,106 @@ Desactivar le quita el acceso al instante y conserva su historial. Reactivar req
 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
+| 400 | `INVALID_STATUS_DATE` · `VALIDATION_ERROR` · `INVALID_JSON` | Fecha inválida |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
+| 409 | `EMPLOYEE_LIMIT_REACHED` · `STATUS_DATE_IN_CLOSED_PERIOD` | Sin lugar para reactivar o la fecha cae en un periodo cerrado |
+
+<a id="op-get-company-employees-id-pay-rates"></a>
+#### `GET /company/employees/{id}/pay-rates`
+
+**Sueldo de un empleado**
+
+**Acceso:** permiso `pay.manage` (admin de empresa, multi_company_admin).
+
+Historial de sueldo con la moneda de la empresa. Solo lo ven los admins; el empleado no.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Respuesta 200:** Historial de sueldo
+
+- `data`: [EmployeePayRates](#schema-employeepayrates)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
+
+<a id="op-post-company-employees-id-pay-rates"></a>
+#### `POST /company/employees/{id}/pay-rates`
+
+**Cambiar el sueldo de un empleado**
+
+**Acceso:** permiso `pay.manage` (admin de empresa, multi_company_admin).
+
+Agrega un cambio que rige desde `effectiveFrom` hasta el siguiente. Si ya hay uno con esa fecha, lo reemplaza. Por hora paga horas × tarifa; el sueldo fijo se reparte entre los 14 días del periodo y solo cuenta los días activos. Queda en la auditoría.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `kind` | `hourly` \| `salary` | sí | `hourly`: el monto es lo que se paga por hora. `salary`: sueldo fijo de cada periodo de 14 días. |
+| `amountCents` | entero | sí | En centavos de la moneda de la empresa: 1550 = 15.50. (de 0 a 1000000000; ej. `1550`) |
+| `effectiveFrom` | fecha AAAA-MM-DD | sí | Día desde el que rige. Para aplicarlo a todo el periodo en curso, manda su primer día. No puede caer en un periodo cerrado. (ej. `"2026-10-19"`) |
+
+**Respuesta 200:** Historial actualizado
+
+- `data`: [EmployeePayRates](#schema-employeepayrates)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
 | 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
-| 409 | `EMPLOYEE_LIMIT_REACHED` | Sin lugar para reactivar |
+| 409 | `PAY_RATE_IN_CLOSED_PERIOD` | La fecha cae en un periodo cerrado |
+
+<a id="op-delete-company-employees-id-pay-rates-rateid"></a>
+#### `DELETE /company/employees/{id}/pay-rates/{rateId}`
+
+**Quitar un cambio de sueldo**
+
+**Acceso:** permiso `pay.manage` (admin de empresa, multi_company_admin).
+
+Para corregir un cambio equivocado, por ejemplo con la fecha mal puesta. No se puede quitar uno que rige en un periodo cerrado (`locked`). Queda en la auditoría con el monto que tenía.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `rateId` | texto (uuid) | sí | — |
+
+**Respuesta 200:** Historial actualizado
+
+- `data`: [EmployeePayRates](#schema-employeepayrates)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `PAY_RATE_NOT_FOUND` | El empleado o el cambio no existen en tu empresa |
+| 409 | `PAY_RATE_IN_CLOSED_PERIOD` | Rige en un periodo cerrado |
 
 <a id="op-post-company-employees-id-revoke-sessions"></a>
 #### `POST /company/employees/{id}/revoke-sessions`
@@ -1847,6 +2122,65 @@ Empleados activos, IN y OUT, horas de hoy y del periodo, límites alcanzados y r
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-attendance-live"></a>
+#### `GET /portfolio/attendance/live`
+
+**Quién está trabajando ahora en todas mis empresas, y desde dónde**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Una fila por empleado con la entrada abierta, con su empresa y el punto donde marcó (`clockInLocation`, null si la registró un admin). Sirve para el mapa. Solo cuenta las empresas activas.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Quién trabaja ahora
+
+- `data`: [PortfolioLive](#schema-portfoliolive)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-attendance-map"></a>
+#### `GET /portfolio/attendance/map`
+
+**Dónde marcó la entrada cada empleado de todas mis empresas**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+Marcajes con ubicación en un rango de días laborales (`from`/`to`), los más recientes primero, con empresa, empleado, dentro o fuera de zona y si siguen abiertos. Devuelve hasta 500 puntos y `truncated` avisa si había más. Acota con `companyId` o `employeeId`. Solo cuenta las empresas activas.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `employeeId` | texto (uuid) | no | — |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Puntos del mapa
+
+- `data`: [AttendanceMap](#schema-attendancemap)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
@@ -2004,6 +2338,100 @@ Devuelve un archivo CSV (`text/csv`), no JSON.
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
 
+<a id="op-get-portfolio-payroll"></a>
+#### `GET /portfolio/payroll`
+
+**Nómina de todas mis empresas**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+La nómina de todos los empleados de mis empresas activas, con su empresa y su moneda, y un total por moneda en `meta.payTotals`: los montos de monedas distintas nunca se suman.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Nómina
+
+- `data`: [PortfolioPayrollRow](#schema-portfoliopayrollrow)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+| `period` | objeto | — |
+| `period.start` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `period.end` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `previousPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `nextPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `totalHours` | número | Horas de las filas que coinciden con el filtro |
+| `employeeCount` | entero | Empleados del filtro, con y sin sueldo; la tabla solo trae a los que tienen monto |
+| `missingPay` | objeto[] | Empleados sin sueldo en el periodo, con su empresa |
+| `missingPay[].company` | objeto | — |
+| `missingPay[].company.id` | texto (uuid) | — |
+| `missingPay[].company.name` | texto | — |
+| `missingPay[].company.code` | texto | — |
+| `missingPay[].employee` | objeto | — |
+| `missingPay[].employee.id` | texto (uuid) | — |
+| `missingPay[].employee.firstName` | texto | — |
+| `missingPay[].employee.lastName` | texto | — |
+| `missingPay[].employee.employeeCode` | texto o null | — |
+| `missingPay[].employee.active` | booleano | — |
+| `payTotals` | objeto[] | Total a pagar de cada moneda, de las filas del filtro: las empresas pueden pagar en monedas distintas y nunca se suman. |
+| `payTotals[].currency` | texto | (ej. `"USD"`) |
+| `payTotals[].totalCents` | entero | Suma de lo que se paga en el filtro |
+| `payTotals[].hourlyCents` | entero | Parte del total de quienes cobran por hora (según su sueldo en su último día del periodo) |
+| `payTotals[].salaryCents` | entero | Parte del total de quienes tienen sueldo fijo |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
+<a id="op-get-portfolio-payroll-export"></a>
+#### `GET /portfolio/payroll/export`
+
+**Exportar la nómina de todas mis empresas a CSV**
+
+**Acceso:** permiso `portfolio.read` (multi_company_admin).
+
+La misma tabla de `/portfolio/payroll`, sin paginar, como CSV, con una fila de total por moneda.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+| `companyId` | texto (uuid) | no | Solo una de tus empresas. Una que no es tuya responde 404, igual que una inexistente |
+
+**Respuesta 200:** Archivo CSV
+
+Devuelve un archivo CSV (`text/csv`), no JSON.
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no es tuya |
+
 ### Empleado · Asistencia
 
 <a id="op-get-me-clock-status"></a>
@@ -2034,7 +2462,15 @@ Estado actual, entrada abierta (si hay) y hora del servidor.
 
 **Acceso:** permiso `attendance.clock_own` (empleado).
 
-La hora la registra el servidor (no se envía). Queda guardada la zona horaria del empleado y su día laboral local.
+La hora la registra el servidor (no se envía). Queda guardada la zona horaria del empleado y su día laboral local. Hay que mandar la ubicación del dispositivo (`latitude`, `longitude` y `accuracyMeters`); sin ella no se marca. Solo se guarda en la entrada, nunca de forma continua.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `latitude` | número | no | Grados, de -90 a 90 (ej. `40.7608`) |
+| `longitude` | número | no | Grados, de -180 a 180 (ej. `-111.891`) |
+| `accuracyMeters` | número | no | Precisión que reporta el dispositivo, en metros. Una baja no impide marcar (ej. `12`) |
 
 **Respuesta 201:** Entrada registrada
 
@@ -2044,6 +2480,7 @@ La hora la registra el servidor (no se envía). Queda guardada la zona horaria d
 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
+| 400 | `LOCATION_REQUIRED` · `INVALID_LOCATION` · `VALIDATION_ERROR` · `INVALID_JSON` | Falta la ubicación o no es válida |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_PROFILE_NOT_FOUND` | Tu usuario no tiene perfil de empleado |
@@ -2241,6 +2678,43 @@ Filtra por día laboral (`from`/`to`, inclusive). `meta.totalHours` suma las hor
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_PROFILE_NOT_FOUND` | Tu usuario no tiene perfil de empleado |
+
+<a id="op-patch-me-time-entries-id"></a>
+#### `PATCH /me/time-entries/{id}`
+
+**Corregir mi marcaje**
+
+**Acceso:** permiso `attendance.clock_own` (empleado).
+
+Solo si el admin te dio permiso y no ha vencido (`selfEdit` en `/me/clock-status`). Cambia la entrada o la salida de un marcaje tuyo de los últimos días que permite la empresa, también para poner la salida que olvidaste un día anterior. La entrada abierta de hoy se termina con `POST /me/clock-out`. El motivo es obligatorio y el admin ve el cambio en su actividad.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `clockInAt` | fecha y hora ISO 8601 | no | (ej. `"2026-06-01T08:00:00-06:00"`) |
+| `clockOutAt` | fecha y hora ISO 8601 | no | (ej. `"2026-06-01T08:00:00-06:00"`) |
+| `reason` | texto | sí | (5 a 500 caracteres; ej. `"Olvidó marcar la salida; confirmado con su supervisor"`) |
+
+**Respuesta 200:** Marcaje corregido
+
+- `data`: [MyTimeEntry](#schema-mytimeentry)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_TIME_RANGE` · `TIME_IN_FUTURE` · `NO_CHANGES` · `INVALID_REASON` · `VALIDATION_ERROR` · `INVALID_JSON` | Corrección inválida |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `SELF_EDIT_NOT_ALLOWED` · `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sin permiso para corregir |
+| 404 | `TIME_ENTRY_NOT_FOUND` · `EMPLOYEE_PROFILE_NOT_FOUND` | El marcaje no existe o no es tuyo |
+| 409 | `SELF_EDIT_OUT_OF_RANGE` · `SELF_EDIT_OPEN_TODAY` · `SELF_EDIT_OVER_LIMIT` · `TIME_ENTRY_OVERLAP` · `TIME_ENTRY_CHANGED` · `TIME_ENTRY_VOIDED` · `PERIOD_CLOSED` | El cambio no se puede hacer |
 
 ### Empresa · Asistencia
 
@@ -2463,7 +2937,7 @@ Quién marcó entrada o salida por un empleado, creó registros manuales, corrig
 | `page` | entero | no | (de 1 a ∞; por defecto `1`) |
 | `limit` | entero | no | (de 1 a 100; por defecto `20`) |
 | `employeeId` | texto (uuid) | no | Solo lo que afectó a este empleado |
-| `type` | `time_entry.clocked_in_by_admin` \| `time_entry.clocked_out_by_admin` \| `time_entry.created_by_admin` \| `time_entry.corrected_by_admin` \| `time_entry.voided_by_admin` \| `pay_period.closed` | no | — |
+| `type` | `time_entry.clocked_in_by_admin` \| `time_entry.clocked_out_by_admin` \| `time_entry.created_by_admin` \| `time_entry.corrected_by_admin` \| `time_entry.corrected_by_employee` \| `time_entry.voided_by_admin` \| `check_in.voided_by_admin` \| `pay_period.closed` | no | — |
 | `from` | fecha y hora ISO 8601 | no | Desde este instante (inclusive) |
 | `to` | fecha y hora ISO 8601 | no | Hasta este instante (inclusive) |
 
@@ -2508,6 +2982,36 @@ Pantalla de inicio del admin: empleados activos, cuántos están IN y OUT, horas
 | --- | --- | --- |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-get-company-attendance-map"></a>
+#### `GET /company/attendance/map`
+
+**Dónde marcó la entrada cada empleado**
+
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
+
+Marcajes con ubicación en un rango de días laborales (`from`/`to`), los más recientes primero, con el empleado, dentro o fuera de zona y si siguen abiertos. Devuelve hasta 500 puntos y `truncated` avisa si había más. Filtra por `employeeId`.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `employeeId` | texto (uuid) | no | — |
+
+**Respuesta 200:** Puntos del mapa
+
+- `data`: [AttendanceMap](#schema-attendancemap)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | Empleado inexistente |
 
 <a id="op-get-company-attendance-roster"></a>
 #### `GET /company/attendance/roster`
@@ -2791,6 +3295,7 @@ Filtra por empleado, día laboral (`from`/`to`) y estado. Cada empleado se agrup
 | `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
 | `status` | `open` \| `closed` \| `voided` | no | Sin estado no se incluyen los anulados; voided trae solo los anulados |
 | `employeeId` | texto (uuid) | no | — |
+| `location` | `without` \| `outside` | no | without: solo los marcajes sin ubicación guardada; outside: solo los marcados fuera de una zona de trabajo |
 
 **Respuesta 200:** Registros
 
@@ -2939,16 +3444,258 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `TIME_ENTRY_NOT_FOUND` | El registro no existe en tu empresa |
 
+### Empresa · Nómina
+
+<a id="op-get-company-payroll"></a>
+#### `GET /company/payroll`
+
+**Nómina del periodo**
+
+**Acceso:** permiso `pay.manage` (admin de empresa, multi_company_admin).
+
+Lo que se paga a cada empleado en un periodo de 14 días: tipo de pago, sueldo, horas, días con sueldo fijo y monto, más el total. En un periodo cerrado son los montos congelados al cerrar. Sin `date` devuelve el periodo actual.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+
+**Respuesta 200:** Nómina
+
+- `data`: [PayrollRow](#schema-payrollrow)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+| `period` | objeto | — |
+| `period.start` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `period.end` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `previousPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `nextPeriodStart` | fecha AAAA-MM-DD | (ej. `"2026-06-01"`) |
+| `totalHours` | número | Horas de las filas que coinciden con el filtro |
+| `employeeCount` | entero | Empleados del filtro, con y sin sueldo; la tabla solo trae a los que tienen monto |
+| `closed` | [PeriodClosure](#schema-periodclosure) o null | Datos del cierre; null si sigue abierto |
+| `pay` | objeto o null | null si el periodo se cerró antes de que hubiera sueldos |
+| `missingPay` | objeto[] | Empleados sin sueldo en el periodo: no suman al total y no van en la tabla. Se cargan desde su ficha. |
+| `missingPay[].id` | texto (uuid) | — |
+| `missingPay[].firstName` | texto | — |
+| `missingPay[].lastName` | texto | — |
+| `missingPay[].employeeCode` | texto o null | — |
+| `missingPay[].active` | booleano | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+<a id="op-get-company-payroll-export"></a>
+#### `GET /company/payroll/export`
+
+**Exportar la nómina a CSV**
+
+**Acceso:** permiso `pay.manage` (admin de empresa, multi_company_admin).
+
+La misma tabla de `/company/payroll`, sin paginar, como archivo CSV (UTF-8).
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `date` | fecha AAAA-MM-DD | no | Cualquier día dentro del periodo que quieres ver. Sin él se usa el periodo actual |
+| `search` | texto | no | Busca en nombre, apellido, email o código (1 a 100 caracteres) |
+
+**Respuesta 200:** Archivo CSV
+
+Devuelve un archivo CSV (`text/csv`), no JSON.
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+
+### Empleado · Check-ins
+
+<a id="op-get-me-check-ins"></a>
+#### `GET /me/check-ins`
+
+**Mis check-ins**
+
+**Acceso:** permiso `attendance.read_own` (empleado).
+
+Tus llegadas registradas, las más recientes primero. Filtra por día laboral con `from`/`to`. Los que anuló el administrador no aparecen.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+
+**Respuesta 200:** Check-ins
+
+- `data`: [MyCheckIn](#schema-mycheckin)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_PROFILE_NOT_FOUND` | Tu usuario no tiene perfil de empleado |
+
+<a id="op-post-me-check-ins"></a>
+#### `POST /me/check-ins`
+
+**Registrar llegada (check-in)**
+
+**Acceso:** permiso `attendance.clock_own` (empleado).
+
+Deja constancia de que el empleado llegó a un lugar, con la hora del servidor y la ubicación del dispositivo (`latitude`, `longitude` y `accuracyMeters`, obligatorias) y una nota opcional. No marca entrada ni salida y no cuenta horas: funciona con o sin la entrada marcada. Se guarda si cayó dentro o fuera de una zona de trabajo, sin bloquear. La empresa debe tenerlo activado (`allowCheckIns`); hasta 50 por día.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `latitude` | número | no | Grados, de -90 a 90 (ej. `40.7608`) |
+| `longitude` | número | no | Grados, de -180 a 180 (ej. `-111.891`) |
+| `accuracyMeters` | número | no | Precisión que reporta el dispositivo, en metros. Una baja no impide marcar (ej. `12`) |
+| `note` | texto | no | Nota opcional, hasta 200 caracteres (0 a 200 caracteres; ej. `"Llegué con el cliente Pérez"`) |
+
+**Respuesta 201:** Llegada registrada
+
+- `data`: [MyCheckIn](#schema-mycheckin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `LOCATION_REQUIRED` · `INVALID_LOCATION` · `INVALID_CHECK_IN_NOTE` · `VALIDATION_ERROR` · `INVALID_JSON` | Falta la ubicación, no es válida o la nota es muy larga |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_PROFILE_NOT_FOUND` | Tu usuario no tiene perfil de empleado |
+| 409 | `CHECK_INS_DISABLED` · `CHECK_IN_LIMIT_REACHED` | La empresa no lo tiene activado o ya se llegó al máximo del día |
+
+### Empresa · Check-ins
+
+<a id="op-get-company-check-ins"></a>
+#### `GET /company/check-ins`
+
+**Check-ins de los empleados**
+
+**Acceso:** permiso `attendance.read_all` (admin de empresa, multi_company_admin).
+
+Llegadas registradas por los empleados, las más recientes primero, con ubicación, zona y nota. Filtra por `employeeId`, día laboral (`from`/`to`), `location=outside` y `status=voided` para ver los anulados.
+
+**Parámetros de la URL (query):**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `page` | entero | no | (de 1 a ∞; por defecto `1`) |
+| `limit` | entero | no | (de 1 a 100; por defecto `20`) |
+| `from` | fecha AAAA-MM-DD | no | Día laboral inicial (inclusive) |
+| `to` | fecha AAAA-MM-DD | no | Día laboral final (inclusive) |
+| `employeeId` | texto (uuid) | no | — |
+| `location` | `outside` | no | outside: solo los registrados fuera de toda zona de trabajo |
+| `status` | `voided` | no | Sin estado no se incluyen los anulados; voided trae solo los anulados |
+
+**Respuesta 200:** Check-ins
+
+- `data`: [CompanyCheckIn](#schema-companycheckin)[]
+
+- `meta` (datos adicionales de la respuesta):
+
+| Campo | Tipo | Descripción |
+| --- | --- | --- |
+| `page` | entero | — |
+| `limit` | entero | — |
+| `total` | entero | — |
+| `totalPages` | entero | — |
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_DATE_RANGE` · `VALIDATION_ERROR` | Rango inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `EMPLOYEE_NOT_FOUND` | Empleado inexistente |
+
+<a id="op-post-company-check-ins-id-void"></a>
+#### `POST /company/check-ins/{id}/void`
+
+**Anular un check-in**
+
+**Acceso:** permiso `time_entries.correct` (admin de empresa, multi_company_admin).
+
+Para un check-in registrado por error. No se borra: queda con quién lo anuló, cuándo y por qué, deja de verse en listas y mapas y el empleado ya no lo ve. No se puede deshacer.
+
+**Parámetros de la ruta:**
+
+| Nombre | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `reason` | texto | sí | (5 a 500 caracteres; ej. `"Lo registró por error en otro cliente"`) |
+
+**Respuesta 200:** Check-in anulado
+
+- `data`: [CompanyCheckIn](#schema-companycheckin)
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_REASON` · `VALIDATION_ERROR` · `INVALID_JSON` | Motivo inválido |
+| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
+| 404 | `CHECK_IN_NOT_FOUND` | El check-in no existe en tu empresa |
+| 409 | `CHECK_IN_VOIDED` | Ya estaba anulado |
+
 ### Catálogo de códigos de error
 
 | Código | HTTP | Dónde puede aparecer |
 | --- | --- | --- |
 | `ACCOUNT_LOCKED` | 429 | `PATCH /auth/me/password` |
 | `ALREADY_CLOCKED_IN` | 409 | `POST /me/clock-in` |
+| `CHECK_IN_LIMIT_REACHED` | 409 | `POST /me/check-ins` |
+| `CHECK_IN_NOT_FOUND` | 404 | `POST /company/check-ins/{id}/void` |
+| `CHECK_IN_VOIDED` | 409 | `POST /company/check-ins/{id}/void` |
+| `CHECK_INS_DISABLED` | 409 | `POST /me/check-ins` |
 | `COMPANY_ADMIN_NOT_FOUND` | 404 | `POST /platform/companies/{id}/admin/reset-password` |
 | `COMPANY_ALREADY_ASSIGNED` | 409 | `POST /platform/multi-admins/{id}/companies` |
-| `COMPANY_NOT_FOUND` | 404 | 12 endpoints |
-| `COMPANY_SUSPENDED` | 403 | 68 endpoints |
+| `COMPANY_NOT_FOUND` | 404 | 16 endpoints |
+| `COMPANY_SUSPENDED` | 403 | 86 endpoints |
 | `DAILY_LIMIT_REACHED` | 409 | `POST /me/clock-in`, `POST /company/employees/{id}/clock-in` |
 | `DAILY_REPORT_LOCKED` | 409 | `PUT /me/daily-reports/{date}` |
 | `DAILY_REPORT_NOT_FOUND` | 404 | `GET /company/daily-reports/{id}/revisions` |
@@ -2960,56 +3707,70 @@ Deja de contar en todo: horas, límite diario, hojas de tiempo, reportes pendien
 | `EMPLOYEE_INACTIVE` | 409 | `POST /company/employees/{id}/clock-in` |
 | `EMPLOYEE_LIMIT_REACHED` | 409 | `POST /company/employees`, `PATCH /company/employees/{id}/status` |
 | `EMPLOYEE_NOT_CLOCKED_IN` | 409 | `POST /company/employees/{id}/clock-out` |
-| `EMPLOYEE_NOT_FOUND` | 404 | 15 endpoints |
-| `EMPLOYEE_PROFILE_NOT_FOUND` | 404 | 8 endpoints |
+| `EMPLOYEE_NOT_FOUND` | 404 | 19 endpoints |
+| `EMPLOYEE_PROFILE_NOT_FOUND` | 404 | 11 endpoints |
 | `ERROR` | 503 | `GET /health` |
 | `EXPORT_TOO_LARGE` | 400 | `GET /company/daily-reports/export`, `GET /portfolio/daily-reports/export` |
-| `FORBIDDEN` | 403 | 62 endpoints |
+| `FORBIDDEN` | 403 | 80 endpoints |
+| `INVALID_CHECK_IN_NOTE` | 400 | `POST /me/check-ins` |
 | `INVALID_COMPANY_NAME` | 400 | 4 endpoints |
 | `INVALID_CREDENTIALS` | 401 | `POST /auth/login` |
 | `INVALID_CURRENT_PASSWORD` | 400 | `PATCH /auth/me/password` |
 | `INVALID_DAILY_REPORT` | 400 | `POST /me/clock-out`, `PUT /me/daily-reports/{date}` |
-| `INVALID_DATE_RANGE` | 400 | 8 endpoints |
-| `INVALID_JSON` | 400 | 25 endpoints |
+| `INVALID_DATE_RANGE` | 400 | 12 endpoints |
+| `INVALID_JSON` | 400 | 32 endpoints |
+| `INVALID_LOCATION` | 400 | `POST /me/clock-in`, `POST /me/check-ins` |
 | `INVALID_MAX_COMPANIES` | 400 | `POST /platform/multi-admins`, `PATCH /platform/multi-admins/{id}` |
 | `INVALID_MAX_EMPLOYEES` | 400 | 4 endpoints |
 | `INVALID_PHONE` | 400 | `POST /company/employees`, `PATCH /company/employees/{id}` |
-| `INVALID_REASON` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
+| `INVALID_REASON` | 400 | 5 endpoints |
 | `INVALID_REFRESH_TOKEN` | 401 | `POST /auth/refresh` |
 | `INVALID_REPORT_DATE` | 400 | `PUT /me/daily-reports/{date}` |
-| `INVALID_TIME_RANGE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
+| `INVALID_STATUS_DATE` | 400 | `PATCH /company/employees/{id}/status` |
+| `INVALID_TIME_RANGE` | 400 | `PATCH /me/time-entries/{id}`, `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `INVALID_TIMEZONE` | 400 | 6 endpoints |
-| `INVALID_TOKEN` | 401 | 66 endpoints |
+| `INVALID_TOKEN` | 401 | 84 endpoints |
+| `LOCATION_REQUIRED` | 400 | `POST /me/clock-in`, `POST /me/check-ins` |
 | `MANUAL_ENTRY_TOO_OLD` | 400 | `POST /company/employees/{id}/time-entries` |
 | `MAX_COMPANIES_BELOW_ASSIGNED` | 409 | `PATCH /platform/multi-admins/{id}` |
 | `MAX_COMPANIES_REACHED` | 409 | `POST /platform/multi-admins/{id}/companies`, `POST /portfolio/companies` |
 | `MAX_EMPLOYEES_BELOW_ACTIVE` | 409 | `PATCH /platform/companies/{id}` |
 | `MEMBERSHIP_NOT_FOUND` | 404 | `DELETE /platform/multi-admins/{id}/companies/{companyId}` |
-| `MISSING_TOKEN` | 401 | 66 endpoints |
+| `MISSING_TOKEN` | 401 | 84 endpoints |
 | `MULTI_ADMIN_NOT_FOUND` | 404 | 6 endpoints |
-| `NO_CHANGES` | 400 | `PATCH /company/time-entries/{id}` |
+| `NO_CHANGES` | 400 | `PATCH /me/time-entries/{id}`, `PATCH /company/time-entries/{id}` |
 | `NO_WORK_ON_DATE` | 400 | `PUT /me/daily-reports/{date}` |
 | `NOT_CLOCKED_IN` | 409 | `POST /me/clock-out` |
-| `PASSWORD_CHANGE_REQUIRED` | 403 | 63 endpoints |
+| `PASSWORD_CHANGE_REQUIRED` | 403 | 81 endpoints |
 | `PASSWORD_REUSED` | 400 | `PATCH /auth/me/password` |
+| `PAY_RATE_IN_CLOSED_PERIOD` | 409 | `POST /company/employees/{id}/pay-rates`, `DELETE /company/employees/{id}/pay-rates/{rateId}` |
+| `PAY_RATE_NOT_FOUND` | 404 | `DELETE /company/employees/{id}/pay-rates/{rateId}` |
 | `PERIOD_ALREADY_CLOSED` | 409 | `POST /company/periods/close` |
-| `PERIOD_CLOSED` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
+| `PERIOD_CLOSED` | 409 | 4 endpoints |
 | `PERIOD_HAS_OPEN_ENTRIES` | 409 | `POST /company/periods/close` |
 | `PERIOD_NOT_FINISHED` | 409 | `POST /company/periods/close` |
 | `REFRESH_TOKEN_EXPIRED` | 401 | `POST /auth/refresh` |
 | `REPORT_DATE_TOO_OLD` | 400 | `PUT /me/daily-reports/{date}` |
+| `SELF_EDIT_NOT_ALLOWED` | 403 | `PATCH /me/time-entries/{id}` |
+| `SELF_EDIT_OPEN_TODAY` | 409 | `PATCH /me/time-entries/{id}` |
+| `SELF_EDIT_OUT_OF_RANGE` | 409 | `PATCH /me/time-entries/{id}` |
+| `SELF_EDIT_OVER_LIMIT` | 409 | `PATCH /me/time-entries/{id}` |
 | `SESSION_MAX_AGE_REACHED` | 401 | `POST /auth/refresh` |
-| `SESSION_REVOKED` | 401 | 66 endpoints |
+| `SESSION_REVOKED` | 401 | 84 endpoints |
+| `STATUS_DATE_IN_CLOSED_PERIOD` | 409 | `PATCH /company/employees/{id}/status` |
 | `TEMPORARY_PASSWORD_EXPIRED` | 403 | `POST /auth/login` |
-| `TIME_ENTRY_CHANGED` | 409 | `PATCH /company/time-entries/{id}` |
-| `TIME_ENTRY_NOT_FOUND` | 404 | 4 endpoints |
-| `TIME_ENTRY_OVERLAP` | 409 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
-| `TIME_ENTRY_VOIDED` | 409 | `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
-| `TIME_IN_FUTURE` | 400 | `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
-| `TOKEN_EXPIRED` | 401 | 66 endpoints |
-| `USER_INACTIVE` | 403 | 68 endpoints |
-| `VALIDATION_ERROR` | 400 | 60 endpoints |
+| `TIME_ENTRY_CHANGED` | 409 | `PATCH /me/time-entries/{id}`, `PATCH /company/time-entries/{id}` |
+| `TIME_ENTRY_NOT_FOUND` | 404 | 5 endpoints |
+| `TIME_ENTRY_OVERLAP` | 409 | `PATCH /me/time-entries/{id}`, `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
+| `TIME_ENTRY_VOIDED` | 409 | `PATCH /me/time-entries/{id}`, `PATCH /company/time-entries/{id}`, `POST /company/time-entries/{id}/void` |
+| `TIME_IN_FUTURE` | 400 | `PATCH /me/time-entries/{id}`, `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
+| `TOKEN_EXPIRED` | 401 | 84 endpoints |
+| `USER_INACTIVE` | 403 | 86 endpoints |
+| `VALIDATION_ERROR` | 400 | 78 endpoints |
 | `WEAK_PASSWORD` | 400 | `PATCH /auth/me/password` |
+| `WORK_SITE_LIMIT` | 409 | `POST /company/work-sites` |
+| `WORK_SITE_NOT_FOUND` | 404 | `PATCH /company/work-sites/{id}` |
+| `WORK_SITES_REQUIRED` | 409 | `PATCH /company`, `PATCH /company/work-sites/{id}` |
 
 Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSUPPORTED_MEDIA_TYPE` (415), `TOO_MANY_REQUESTS` (429) e `INTERNAL_ERROR` (500).
 
@@ -3035,7 +3796,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
-| `type` | `time_entry.clocked_in_by_admin` \| `time_entry.clocked_out_by_admin` \| `time_entry.created_by_admin` \| `time_entry.corrected_by_admin` \| `time_entry.voided_by_admin` \| `pay_period.closed` | sí | time_entry.clocked_in_by_admin, clocked_out_by_admin, created_by_admin, corrected_by_admin, voided_by_admin o pay_period.closed |
+| `type` | `time_entry.clocked_in_by_admin` \| `time_entry.clocked_out_by_admin` \| `time_entry.created_by_admin` \| `time_entry.corrected_by_admin` \| `time_entry.corrected_by_employee` \| `time_entry.voided_by_admin` \| `check_in.voided_by_admin` \| `pay_period.closed` | sí | time_entry.clocked_in_by_admin, clocked_out_by_admin, created_by_admin, corrected_by_admin, corrected_by_employee (el empleado corrigió su propio marcaje con permiso), voided_by_admin, check_in.voided_by_admin o pay_period.closed |
 | `occurredAt` | fecha y hora ISO 8601 | sí | — |
 | `actor` | objeto o null | sí | Quién lo hizo |
 | `actor.id` | texto (uuid) | sí | — |
@@ -3048,6 +3809,8 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `employee.employeeCode` | texto o null | sí | — |
 | `details` | objeto | sí | — |
 | `details.timeEntryId` | texto (uuid) | no | — |
+| `details.checkInId` | texto (uuid) | no | — |
+| `details.checkedInAt` | fecha y hora ISO 8601 | no | — |
 | `details.reason` | texto | no | — |
 | `details.clockInAt` | fecha y hora ISO 8601 | no | — |
 | `details.clockOutAt` | fecha y hora ISO 8601 o null | no | — |
@@ -3057,6 +3820,30 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `details.periodStart` | fecha AAAA-MM-DD | no | (ej. `"2026-06-01"`) |
 | `details.periodEnd` | fecha AAAA-MM-DD | no | (ej. `"2026-06-01"`) |
 | `details.totalHours` | número | no | — |
+
+<a id="schema-attendancemap"></a>
+#### AttendanceMap
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `truncated` | booleano | sí | true si había más marcajes con ubicación que el tope y se devolvieron los más recientes |
+| `points` | objeto[] | sí | — |
+| `points[].id` | texto (uuid) | sí | — |
+| `points[].company` | objeto | sí | — |
+| `points[].company.id` | texto (uuid) | sí | — |
+| `points[].company.name` | texto | sí | — |
+| `points[].company.code` | texto | sí | — |
+| `points[].employee` | objeto | sí | — |
+| `points[].employee.id` | texto (uuid) | sí | — |
+| `points[].employee.firstName` | texto | sí | — |
+| `points[].employee.lastName` | texto | sí | — |
+| `points[].employee.employeeCode` | texto o null | sí | — |
+| `points[].workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
+| `points[].clockInAt` | fecha y hora ISO 8601 | sí | — |
+| `points[].timezone` | texto | sí | — |
+| `points[].open` | booleano | sí | true mientras la entrada sigue abierta |
+| `points[].clockInLocation` | [ClockLocation](#schema-clocklocation) | sí | — |
+| `points[].clockInZone` | [ClockZone](#schema-clockzone) o null | sí | — |
 
 <a id="schema-attendancerosterentry"></a>
 #### AttendanceRosterEntry
@@ -3073,6 +3860,8 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `openEntryId` | texto (uuid) o null | sí | — |
 | `clockedInAt` | fecha y hora ISO 8601 o null | sí | — |
 | `clockedInLocal` | texto o null | sí | — |
+| `clockedInLocation` | [ClockLocation](#schema-clocklocation) o null | sí | Dónde marcó la entrada abierta; null si no hay o la hizo un admin |
+| `clockedInZone` | [ClockZone](#schema-clockzone) o null | sí | Si la entrada abierta cayó dentro o fuera de una zona de trabajo |
 | `elapsedSeconds` | entero o null | sí | De la entrada abierta |
 | `workedTodaySeconds` | entero | sí | — |
 | `workedTodayHours` | número | sí | — |
@@ -3122,6 +3911,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `status` | `active` \| `inactive` | sí | — |
+| `effectiveOn` | fecha AAAA-MM-DD | no | Solo para el sueldo fijo. Al desactivar, el último día que se le paga; al reactivar, el primero. Por defecto hoy en la zona del empleado; no puede ser futuro ni caer en un periodo cerrado. El acceso cambia al momento. (ej. `"2026-10-30"`) |
 
 <a id="schema-changemultiadminstatusrequest"></a>
 #### ChangeMultiAdminStatusRequest
@@ -3137,6 +3927,24 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | --- | --- | --- | --- |
 | `currentPassword` | texto | sí | (1 a 128 caracteres) |
 | `newPassword` | texto | sí | Mínimo 12 caracteres; distinta de la actual y del email. (0 a 128 caracteres) |
+
+<a id="schema-clockinrequest"></a>
+#### ClockInRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `latitude` | número | no | Grados, de -90 a 90 (ej. `40.7608`) |
+| `longitude` | número | no | Grados, de -180 a 180 (ej. `-111.891`) |
+| `accuracyMeters` | número | no | Precisión que reporta el dispositivo, en metros. Una baja no impide marcar (ej. `12`) |
+
+<a id="schema-clocklocation"></a>
+#### ClockLocation
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `latitude` | número | sí | Grados, de -90 a 90 (ej. `40.7608`) |
+| `longitude` | número | sí | Grados, de -180 a 180 (ej. `-111.891`) |
+| `accuracyMeters` | número | sí | Precisión que reporta el dispositivo, en metros. Una baja no impide marcar (ej. `12`) |
 
 <a id="schema-clockoutrequest"></a>
 #### ClockOutRequest
@@ -3162,10 +3970,23 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `timezone` | texto | sí | Zona que se usará al marcar |
 | `pendingReports` | fecha AAAA-MM-DD[] | sí | Días con el reporte pendiente; mientras haya alguno no se puede marcar entrada |
 | `canClockIn` | booleano | sí | false si ya hay una entrada abierta, hay reportes pendientes o se alcanzó el límite diario |
+| `canCheckIn` | booleano | sí | true si la empresa deja registrar llegadas (`POST /me/check-ins`), esté o no marcada la entrada |
+| `selfEdit` | objeto o null | sí | Si hoy puede corregir sus marcajes (`PATCH /me/time-entries/{id}`); null si no tiene permiso o ya venció |
 | `dailyReport` | objeto | sí | Reporte del día de la entrada abierta, o de hoy si no hay |
 | `dailyReport.required` | booleano | sí | true: la empresa exige el reporte al marcar salida |
 | `dailyReport.workDate` | fecha AAAA-MM-DD | sí | (ej. `"2026-06-01"`) |
 | `dailyReport.content` | texto o null | sí | Reporte ya escrito ese día, para mostrarlo cargado al marcar salida. Es Markdown. |
+
+<a id="schema-clockzone"></a>
+#### ClockZone
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `status` | `inside` \| `outside` | sí | inside: dentro de una zona de trabajo; outside: fuera de todas |
+| `site` | objeto | sí | La zona más cercana al punto donde marcó |
+| `site.id` | texto (uuid) | sí | — |
+| `site.name` | texto | sí | — |
+| `distanceMeters` | entero | sí | Metros hasta el centro de esa zona |
 
 <a id="schema-closeperiodrequest"></a>
 #### ClosePeriodRequest
@@ -3203,6 +4024,32 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `status` | `active` \| `inactive` | sí | — |
 | `lastLoginAt` | fecha y hora ISO 8601 o null | sí | — |
 
+<a id="schema-companycheckin"></a>
+#### CompanyCheckIn
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `checkedInAt` | fecha y hora ISO 8601 | sí | Instante exacto en UTC |
+| `checkedInLocal` | texto | sí | La misma hora en la zona horaria del empleado (ej. `"2026-06-01T10:15:00-06:00"`) |
+| `timezone` | texto | sí | — |
+| `workDate` | fecha AAAA-MM-DD | sí | Día laboral local del empleado (ej. `"2026-06-01"`) |
+| `location` | [ClockLocation](#schema-clocklocation) | sí | — |
+| `zone` | [ClockZone](#schema-clockzone) o null | sí | Dentro o fuera de la zona de trabajo más cercana; null si la empresa no tiene zonas |
+| `note` | texto o null | sí | — |
+| `employee` | objeto | sí | — |
+| `employee.id` | texto (uuid) | sí | — |
+| `employee.firstName` | texto | sí | — |
+| `employee.lastName` | texto | sí | — |
+| `employee.employeeCode` | texto o null | sí | — |
+| `status` | `active` \| `voided` | sí | — |
+| `voidedAt` | fecha y hora ISO 8601 o null | sí | — |
+| `voidReason` | texto o null | sí | — |
+| `voidedBy` | objeto o null | sí | — |
+| `voidedBy.id` | texto (uuid) | sí | — |
+| `voidedBy.firstName` | texto | sí | — |
+| `voidedBy.lastName` | texto | sí | — |
+
 <a id="schema-companysettings"></a>
 #### CompanySettings
 
@@ -3216,6 +4063,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `status` | `active` \| `suspended` | sí | — |
 | `dailyLimitMinutes` | entero o null | sí | null = sin límite. |
 | `requireDailyReport` | booleano | sí | — |
+| `enforceWorkSites` | booleano | sí | — |
+| `allowCheckIns` | booleano | sí | — |
+| `selfEditDays` | entero | sí | — |
+| `currency` | texto | sí | (ej. `"USD"`) |
 | `maxEmployees` | entero | sí | Lo define el admin global. |
 | `activeEmployees` | entero | sí | — |
 
@@ -3242,6 +4093,16 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `clockInAt` | fecha y hora ISO 8601 | no | (ej. `"2026-06-01T08:00:00-06:00"`) |
 | `clockOutAt` | fecha y hora ISO 8601 | no | (ej. `"2026-06-01T08:00:00-06:00"`) |
 | `reason` | texto | sí | (5 a 500 caracteres; ej. `"Olvidó marcar la salida; confirmado con su supervisor"`) |
+
+<a id="schema-createcheckinrequest"></a>
+#### CreateCheckInRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `latitude` | número | no | Grados, de -90 a 90 (ej. `40.7608`) |
+| `longitude` | número | no | Grados, de -180 a 180 (ej. `-111.891`) |
+| `accuracyMeters` | número | no | Precisión que reporta el dispositivo, en metros. Una baja no impide marcar (ej. `12`) |
+| `note` | texto | no | Nota opcional, hasta 200 caracteres (0 a 200 caracteres; ej. `"Llegué con el cliente Pérez"`) |
 
 <a id="schema-createcompanyrequest"></a>
 #### CreateCompanyRequest
@@ -3318,6 +4179,16 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
 | `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
 
+<a id="schema-createworksiterequest"></a>
+#### CreateWorkSiteRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | sí | (1 a 100 caracteres; ej. `"Oficina central"`) |
+| `latitude` | número | sí | (de -90 a 90; ej. `40.7608`) |
+| `longitude` | número | sí | (de -180 a 180; ej. `-111.891`) |
+| `radiusMeters` | entero | sí | Radio de la zona en metros (10 a 60000) (de 10 a 60000; ej. `150`) |
+
 <a id="schema-currentuser"></a>
 #### CurrentUser
 
@@ -3335,7 +4206,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `company.name` | texto | sí | — |
 | `company.timezone` | texto | sí | — |
 | `employee` | objeto o null | sí | — |
-| `permissions` | (`companies.manage` \| `multi_admins.manage` \| `portfolio.read` \| `portfolio.companies.create` \| `company.settings.manage` \| `employees.manage` \| `attendance.read_all` \| `time_entries.correct` \| `attendance.clock_employees` \| `periods.manage` \| `attendance.clock_own` \| `attendance.read_own`)[] | sí | — |
+| `permissions` | (`companies.manage` \| `multi_admins.manage` \| `portfolio.read` \| `portfolio.companies.create` \| `company.settings.manage` \| `employees.manage` \| `attendance.read_all` \| `time_entries.correct` \| `attendance.clock_employees` \| `periods.manage` \| `pay.manage` \| `attendance.clock_own` \| `attendance.read_own`)[] | sí | — |
 
 <a id="schema-dailyreport"></a>
 #### DailyReport
@@ -3380,11 +4251,26 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `effectiveTimezone` | texto | sí | Zona que realmente aplica. |
 | `dailyLimitMinutes` | entero o null | sí | Propio; null = hereda. |
 | `effectiveDailyLimitMinutes` | entero o null | sí | Límite que realmente aplica; null = sin límite. |
+| `allowCheckIns` | booleano o null | sí | Check-in propio: true o false lo fuerzan; null = hereda el de la empresa. |
+| `effectiveAllowCheckIns` | booleano | sí | Si el empleado puede registrar llegadas, ya combinando el suyo con el de la empresa. |
+| `allowSelfEdit` | booleano | sí | Si el admin le permite corregir sus propias horas. |
+| `selfEditUntil` | fecha AAAA-MM-DD o null | sí | Último día del permiso; null = sin vencimiento. |
 | `status` | `active` \| `inactive` | sí | — |
 | `mustChangePassword` | booleano | sí | — |
 | `lastLoginAt` | fecha y hora ISO 8601 o null | sí | — |
 | `createdAt` | fecha y hora ISO 8601 | sí | — |
 | `updatedAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-employeepayrates"></a>
+#### EmployeePayRates
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `currency` | texto | sí | (ej. `"USD"`) |
+| `rates` | [PayRate](#schema-payrate)[] | sí | — |
+| `inactiveSpans` | objeto[] | sí | Bajas del empleado, de la más vieja a la más nueva: días en que no cobra sueldo fijo. `toDay` es null mientras sigue inactivo. |
+| `inactiveSpans[].fromDay` | fecha AAAA-MM-DD | sí | — |
+| `inactiveSpans[].toDay` | fecha AAAA-MM-DD o null | sí | — |
 
 <a id="schema-employeewithtemporarypassword"></a>
 #### EmployeeWithTemporaryPassword
@@ -3458,6 +4344,20 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `multiAdmin` | [MultiAdmin](#schema-multiadmin) | sí | — |
 | `companies` | [Company](#schema-company)[] | sí | — |
 
+<a id="schema-mycheckin"></a>
+#### MyCheckIn
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `checkedInAt` | fecha y hora ISO 8601 | sí | Instante exacto en UTC |
+| `checkedInLocal` | texto | sí | La misma hora en la zona horaria del empleado (ej. `"2026-06-01T10:15:00-06:00"`) |
+| `timezone` | texto | sí | — |
+| `workDate` | fecha AAAA-MM-DD | sí | Día laboral local del empleado (ej. `"2026-06-01"`) |
+| `location` | [ClockLocation](#schema-clocklocation) | sí | — |
+| `zone` | [ClockZone](#schema-clockzone) o null | sí | Dentro o fuera de la zona de trabajo más cercana; null si la empresa no tiene zonas |
+| `note` | texto o null | sí | — |
+
 <a id="schema-mycompanies"></a>
 #### MyCompanies
 
@@ -3507,6 +4407,8 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `source` | `web` \| `admin` | sí | — |
 | `createdReason` | texto o null | sí | Motivo cuando el admin creó el registro a mano; null en un marcaje normal |
 | `closedBy` | `employee` \| `admin` \| `daily_limit` o null | sí | Quién cerró el registro: el empleado, un admin o el límite diario. null si sigue abierto o es anterior a este dato |
+| `clockInLocation` | [ClockLocation](#schema-clocklocation) o null | sí | Dónde estaba el empleado al marcar su entrada. null si la registró un admin o es anterior a este dato |
+| `clockInZone` | [ClockZone](#schema-clockzone) o null | sí | Si cayó dentro o fuera de una zona de trabajo al marcar. null si la empresa no tenía zonas o no hubo ubicación |
 | `corrected` | booleano | sí | true si un admin lo corrigió |
 
 <a id="schema-payperiodstatus"></a>
@@ -3535,6 +4437,35 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `pendingReports.employees` | entero | sí | — |
 | `pendingReports.days` | entero | sí | Avisa pero no impide cerrar |
 | `canClose` | booleano | sí | — |
+
+<a id="schema-payrate"></a>
+#### PayRate
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `kind` | `hourly` \| `salary` | sí | `hourly`: el monto es lo que se paga por hora. `salary`: sueldo fijo de cada periodo de 14 días. |
+| `amountCents` | entero | sí | — |
+| `effectiveFrom` | fecha AAAA-MM-DD | sí | — |
+| `changedById` | texto (uuid) | sí | — |
+| `locked` | booleano | sí | Rige en un periodo cerrado: ya se pagó con él y no se puede quitar |
+| `createdAt` | fecha y hora ISO 8601 | sí | — |
+| `updatedAt` | fecha y hora ISO 8601 | sí | — |
+
+<a id="schema-payrollrow"></a>
+#### PayrollRow
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `employee` | objeto | sí | — |
+| `employee.id` | texto (uuid) | sí | — |
+| `employee.firstName` | texto | sí | — |
+| `employee.lastName` | texto | sí | — |
+| `employee.employeeCode` | texto o null | sí | — |
+| `employee.active` | booleano | sí | — |
+| `totalHours` | número | sí | — |
+| `openEntries` | entero | sí | Marcajes aún abiertos: no suman horas ni pago hasta que se cierren |
+| `pay` | objeto o null | sí | Por hora: horas × tarifa de cada día. Sueldo fijo: proporcional a los días activos. En un periodo cerrado es lo que se congeló al cerrar. null si el periodo se cerró antes de que hubiera sueldos. |
 
 <a id="schema-pendingreportsofemployee"></a>
 #### PendingReportsOfEmployee
@@ -3601,6 +4532,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `effectiveTimezone` | texto | sí | Zona que realmente aplica. |
 | `dailyLimitMinutes` | entero o null | sí | Propio; null = hereda. |
 | `effectiveDailyLimitMinutes` | entero o null | sí | Límite que realmente aplica; null = sin límite. |
+| `allowCheckIns` | booleano o null | sí | Check-in propio: true o false lo fuerzan; null = hereda el de la empresa. |
+| `effectiveAllowCheckIns` | booleano | sí | Si el empleado puede registrar llegadas, ya combinando el suyo con el de la empresa. |
+| `allowSelfEdit` | booleano | sí | Si el admin le permite corregir sus propias horas. |
+| `selfEditUntil` | fecha AAAA-MM-DD o null | sí | Último día del permiso; null = sin vencimiento. |
 | `status` | `active` \| `inactive` | sí | — |
 | `mustChangePassword` | booleano | sí | — |
 | `lastLoginAt` | fecha y hora ISO 8601 o null | sí | — |
@@ -3610,6 +4545,49 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `company.id` | texto (uuid) | sí | — |
 | `company.name` | texto | sí | — |
 | `company.code` | texto | sí | — |
+
+<a id="schema-portfoliolive"></a>
+#### PortfolioLive
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `asOf` | fecha y hora ISO 8601 | sí | — |
+| `working` | entero | sí | — |
+| `entries` | objeto[] | sí | — |
+| `entries[].company` | objeto | sí | — |
+| `entries[].company.id` | texto (uuid) | sí | — |
+| `entries[].company.name` | texto | sí | — |
+| `entries[].company.code` | texto | sí | — |
+| `entries[].employee` | objeto | sí | — |
+| `entries[].employee.id` | texto (uuid) | sí | — |
+| `entries[].employee.firstName` | texto | sí | — |
+| `entries[].employee.lastName` | texto | sí | — |
+| `entries[].employee.employeeCode` | texto o null | sí | — |
+| `entries[].timezone` | texto | sí | — |
+| `entries[].clockedInAt` | fecha y hora ISO 8601 | sí | — |
+| `entries[].elapsedSeconds` | entero | sí | — |
+| `entries[].clockInLocation` | objeto o null | sí | Dónde marcó la entrada; null si la registró un admin |
+| `entries[].clockInZone` | [ClockZone](#schema-clockzone) o null | sí | Si cayó dentro o fuera de una zona de trabajo; null si no aplica |
+
+<a id="schema-portfoliopayrollrow"></a>
+#### PortfolioPayrollRow
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `company` | objeto | sí | — |
+| `company.id` | texto (uuid) | sí | — |
+| `company.name` | texto | sí | — |
+| `company.code` | texto | sí | — |
+| `employee` | objeto | sí | — |
+| `employee.id` | texto (uuid) | sí | — |
+| `employee.firstName` | texto | sí | — |
+| `employee.lastName` | texto | sí | — |
+| `employee.employeeCode` | texto o null | sí | — |
+| `employee.active` | booleano | sí | — |
+| `totalHours` | número | sí | — |
+| `openEntries` | entero | sí | — |
+| `currency` | texto o null | sí | Moneda del pago: la de su empresa (ej. `"USD"`) |
+| `pay` | objeto o null | sí | Por hora: horas × tarifa de cada día. Sueldo fijo: proporcional a los días activos. En un periodo cerrado es lo que se congeló al cerrar. null si el periodo se cerró antes de que hubiera sueldos. |
 
 <a id="schema-portfoliosummary"></a>
 #### PortfolioSummary
@@ -3711,6 +4689,15 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `refreshToken` | texto | sí | Guárdalo de forma segura. Cada uso devuelve uno nuevo y anula el anterior. |
 | `refreshTokenExpiresAt` | fecha y hora ISO 8601 | sí | — |
 
+<a id="schema-setpayraterequest"></a>
+#### SetPayRateRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `kind` | `hourly` \| `salary` | sí | `hourly`: el monto es lo que se paga por hora. `salary`: sueldo fijo de cada periodo de 14 días. |
+| `amountCents` | entero | sí | En centavos de la moneda de la empresa: 1550 = 15.50. (de 0 a 1000000000; ej. `1550`) |
+| `effectiveFrom` | fecha AAAA-MM-DD | sí | Día desde el que rige. Para aplicarlo a todo el periodo en curso, manda su primer día. No puede caer en un periodo cerrado. (ej. `"2026-10-19"`) |
+
 <a id="schema-switchcompanyrequest"></a>
 #### SwitchCompanyRequest
 
@@ -3736,6 +4723,8 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `source` | `web` \| `admin` | sí | — |
 | `createdReason` | texto o null | sí | Motivo cuando el admin creó el registro a mano; null en un marcaje normal |
 | `closedBy` | `employee` \| `admin` \| `daily_limit` o null | sí | Quién cerró el registro: el empleado, un admin o el límite diario. null si sigue abierto o es anterior a este dato |
+| `clockInLocation` | [ClockLocation](#schema-clocklocation) o null | sí | Dónde estaba el empleado al marcar su entrada. null si la registró un admin o es anterior a este dato |
+| `clockInZone` | [ClockZone](#schema-clockzone) o null | sí | Si cayó dentro o fuera de una zona de trabajo al marcar. null si la empresa no tenía zonas o no hubo ubicación |
 | `employee` | objeto | sí | — |
 | `employee.id` | texto (uuid) | sí | — |
 | `employee.firstName` | texto | sí | — |
@@ -3807,6 +4796,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `name` | texto | no | (2 a 150 caracteres) |
 | `timezone` | texto | no | (1 a 64 caracteres; ej. `"America/Denver"`) |
 | `requireDailyReport` | booleano | no | true obliga al empleado a escribir el reporte de lo que hizo en el día al marcar salida (mínimo 10 caracteres). |
+| `enforceWorkSites` | booleano | no | true exige que los empleados marquen su entrada dentro de una zona de trabajo. Requiere al menos una zona activa. |
+| `allowCheckIns` | booleano | no | true deja que los empleados registren su llegada a un lugar (check-in) sin marcar entrada. No cuenta horas. |
+| `selfEditDays` | entero | no | Cuántos días hacia atrás pueden corregir sus horas los empleados con permiso (1 a 31). Nunca dentro de un periodo cerrado. (de 1 a 31; ej. `7`) |
+| `currency` | texto | no | Moneda en la que cobran los empleados, con el código ISO 4217 de 3 letras (USD, MXN...). Los periodos ya cerrados conservan la suya. (3 a 3 caracteres; ej. `"USD"`) |
 | `dailyLimitMinutes` | entero o null | no | Límite diario para todos los empleados de la empresa. Al alcanzarlo se cierra la entrada abierta y no pueden volver a marcar ese día. `null` = sin límite. (de 1 a 1440; ej. `490`) |
 
 <a id="schema-updateemployeerequest"></a>
@@ -3820,6 +4813,9 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `hiredAt` | fecha AAAA-MM-DD o null | no | (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
 | `dailyLimitMinutes` | entero o null | no | Límite diario propio de este empleado. `null` = usa el de la empresa. Tiene prioridad sobre el de la empresa. (de 1 a 1440; ej. `490`) |
+| `allowCheckIns` | booleano o null | no | Registro de llegada (check-in) propio de este empleado. `true` lo permite y `false` lo prohíbe aunque la empresa diga lo contrario; `null` = usa el de la empresa. |
+| `allowSelfEdit` | booleano | no | Permite que el empleado corrija la hora de entrada o salida de sus marcajes de los últimos días (los que diga la empresa), con motivo. Nunca en un periodo cerrado. |
+| `selfEditUntil` | fecha AAAA-MM-DD o null | no | Último día en que puede corregir; `null` = sin vencimiento. (ej. `"2026-11-15"`) |
 
 <a id="schema-updatemultiadminrequest"></a>
 #### UpdateMultiAdminRequest
@@ -3839,9 +4835,41 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `firstName` | texto | sí | (1 a 100 caracteres) |
 | `lastName` | texto | sí | (1 a 100 caracteres) |
 
+<a id="schema-updateworksiterequest"></a>
+#### UpdateWorkSiteRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `name` | texto | no | (1 a 100 caracteres; ej. `"Oficina central"`) |
+| `latitude` | número | no | (de -90 a 90; ej. `40.7608`) |
+| `longitude` | número | no | (de -180 a 180; ej. `-111.891`) |
+| `radiusMeters` | entero | no | Radio de la zona en metros (10 a 60000) (de 10 a 60000; ej. `150`) |
+| `active` | booleano | no | false desactiva la zona sin borrarla; los marcajes pasados la conservan |
+
+<a id="schema-voidcheckinrequest"></a>
+#### VoidCheckInRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `reason` | texto | sí | (5 a 500 caracteres; ej. `"Lo registró por error en otro cliente"`) |
+
 <a id="schema-voidtimeentryrequest"></a>
 #### VoidTimeEntryRequest
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `reason` | texto | sí | (5 a 500 caracteres; ej. `"Se creó por duplicado"`) |
+
+<a id="schema-worksite"></a>
+#### WorkSite
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `id` | texto (uuid) | sí | — |
+| `name` | texto | sí | — |
+| `latitude` | número | sí | — |
+| `longitude` | número | sí | — |
+| `radiusMeters` | entero | sí | — |
+| `active` | booleano | sí | — |
+| `createdAt` | fecha y hora ISO 8601 | sí | — |
+| `updatedAt` | fecha y hora ISO 8601 | sí | — |

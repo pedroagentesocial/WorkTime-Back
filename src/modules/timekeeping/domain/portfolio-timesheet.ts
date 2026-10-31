@@ -9,14 +9,30 @@ export interface CompanyRef {
   readonly code: string;
 }
 
-export interface PortfolioTimesheetRow extends CompanyTimesheetRow {
+export type PortfolioTimesheetRow<R extends CompanyTimesheetRow = CompanyTimesheetRow> = R & {
   readonly company: CompanyRef;
+};
+
+export interface PortfolioTimesheet<R extends CompanyTimesheetRow = CompanyTimesheetRow> {
+  readonly days: CompanyTimesheet['days'];
+  readonly rows: PortfolioTimesheetRow<R>[];
+  readonly totals: CompanyTimesheet['totals'];
 }
 
-export interface PortfolioTimesheet {
-  readonly days: CompanyTimesheet['days'];
-  readonly rows: PortfolioTimesheetRow[];
-  readonly totals: CompanyTimesheet['totals'];
+export interface CurrencyTotal {
+  readonly currency: string;
+  readonly totalCents: number;
+}
+
+// Montos de varias empresas: solo se suman los de la misma moneda
+export function totalsByCurrency(totals: readonly (CurrencyTotal | null)[]): CurrencyTotal[] {
+  const sums = new Map<string, number>();
+  for (const total of totals) {
+    if (total) sums.set(total.currency, (sums.get(total.currency) ?? 0) + total.totalCents);
+  }
+  return [...sums]
+    .map(([currency, totalCents]) => ({ currency, totalCents }))
+    .sort((a, b) => a.currency.localeCompare(b.currency));
 }
 
 const toCentihours = (hours: number): number => Math.round(hours * 100);
@@ -27,10 +43,13 @@ export function sumHours(values: readonly number[]): number {
 }
 
 // Une las hojas de varias empresas del mismo periodo: una fila por empleado con su empresa
-export function mergeCompanyTimesheets(
+export function mergeCompanyTimesheets<R extends CompanyTimesheetRow>(
   period: PayPeriod,
-  sheets: readonly { readonly company: CompanyRef; readonly sheet: CompanyTimesheet }[],
-): PortfolioTimesheet {
+  sheets: readonly {
+    readonly company: CompanyRef;
+    readonly sheet: { readonly rows: readonly R[]; readonly totals: CompanyTimesheet['totals'] };
+  }[],
+): PortfolioTimesheet<R> {
   const dates = daysOf(period);
   const rows = sheets.flatMap(({ company, sheet }) =>
     sheet.rows.map((row) => ({ ...row, company })),

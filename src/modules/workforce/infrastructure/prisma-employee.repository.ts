@@ -26,9 +26,12 @@ export const EMPLOYEE_SELECT = {
   hiredAt: true,
   timezone: true,
   dailyLimitMinutes: true,
+  allowCheckIns: true,
+  allowSelfEdit: true,
+  selfEditUntil: true,
   createdAt: true,
   updatedAt: true,
-  company: { select: { timezone: true, dailyLimitMinutes: true } },
+  company: { select: { timezone: true, dailyLimitMinutes: true, allowCheckIns: true } },
   user: {
     select: {
       id: true,
@@ -178,6 +181,11 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
             ...(patch.dailyLimitMinutes !== undefined && {
               dailyLimitMinutes: patch.dailyLimitMinutes,
             }),
+            ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
+            ...(patch.allowSelfEdit !== undefined && { allowSelfEdit: patch.allowSelfEdit }),
+            ...(patch.selfEditUntil !== undefined && {
+              selfEditUntil: toDbDate(patch.selfEditUntil),
+            }),
           },
         });
       });
@@ -207,6 +215,8 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
       SELECT (
         EXISTS (SELECT 1 FROM time_entries WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
         OR EXISTS (SELECT 1 FROM daily_reports WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
+        OR EXISTS (SELECT 1 FROM check_ins WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
+        OR EXISTS (SELECT 1 FROM pay_period_closure_pays WHERE employee_id = ${employeeId}::uuid AND company_id = ${companyId}::uuid)
       ) AS found`;
     return rows[0]?.found === true;
   }
@@ -215,6 +225,9 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
     const userId = await this.userIdOf(companyId, employeeId);
     await this.db.client.refreshToken.deleteMany({ where: { userId } });
     await this.db.client.securityEvent.deleteMany({ where: { userId } });
+    // Su historial de sueldo sin pagos cerrados no es historia: se va con la cuenta
+    await this.db.client.employeePayRate.deleteMany({ where: { employeeId, companyId } });
+    await this.db.client.employeeInactiveSpan.deleteMany({ where: { employeeId, companyId } });
     await this.db.client.employee.deleteMany({ where: { id: employeeId, companyId } });
     await this.db.client.user.deleteMany({ where: { id: userId, companyId } });
   }
@@ -283,6 +296,10 @@ export function toView(row: EmployeeRow): EmployeeView {
       row.dailyLimitMinutes,
       row.company.dailyLimitMinutes,
     ),
+    allowCheckIns: row.allowCheckIns,
+    effectiveAllowCheckIns: row.allowCheckIns ?? row.company.allowCheckIns,
+    allowSelfEdit: row.allowSelfEdit,
+    selfEditUntil: fromDbDate(row.selfEditUntil),
     status: row.user.status,
     mustChangePassword: row.user.mustChangePassword,
     lastLoginAt: row.user.lastLoginAt,

@@ -5,7 +5,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -136,7 +142,7 @@ describe('bloqueo de la entrada por reportes pendientes', () => {
     const status = await get(app, as, '/me/clock-status');
     expect(status.body.data).toMatchObject({ pendingReports: ['2026-10-05'], canClockIn: false });
 
-    const blocked = await post(app, as, '/me/clock-in');
+    const blocked = await post(app, as, '/me/clock-in', CLOCK_IN_LOCATION);
     expect(blocked.status).toBe(409);
     expect(blocked.body.error.code).toBe('DAILY_REPORT_PENDING');
     expect(blocked.body.error.details).toEqual({ dates: ['2026-10-05'] });
@@ -152,7 +158,7 @@ describe('bloqueo de la entrada por reportes pendientes', () => {
       pendingReports: [],
       canClockIn: true,
     });
-    expect((await post(app, as, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, as, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('el admin sí puede marcarle entrada a un empleado con pendientes', async () => {
@@ -169,13 +175,13 @@ describe('bloqueo de la entrada por reportes pendientes', () => {
     const { employee: ana, as } = await employee();
     await addEntry(company.id, ana.id, '2026-10-05');
 
-    expect((await post(app, as, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, as, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('canClockIn es falso con una entrada abierta', async () => {
     const { app, employee } = await setup();
     const { as } = await employee();
-    await post(app, as, '/me/clock-in');
+    await post(app, as, '/me/clock-in', CLOCK_IN_LOCATION);
 
     const status = await get(app, as, '/me/clock-status');
     expect(status.body.data).toMatchObject({ clockedIn: true, canClockIn: false });
@@ -197,7 +203,7 @@ describe('al encender el reporte obligatorio', () => {
     const stored = await prisma.company.findUniqueOrThrow({ where: { id: company.id } });
     expect(stored.dailyReportRequiredSince.toISOString().slice(0, 10)).toBe('2026-10-07');
     expect((await get(app, as, '/me/daily-reports/pending')).body.data.days).toEqual([]);
-    expect((await post(app, as, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, as, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('volver a enviar true no reinicia la fecha', async () => {

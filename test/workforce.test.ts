@@ -79,6 +79,10 @@ describe('/company (configuración)', () => {
       status: 'active',
       dailyLimitMinutes: null,
       requireDailyReport: false,
+      enforceWorkSites: false,
+      allowCheckIns: false,
+      selfEditDays: 7,
+      currency: 'USD',
       maxEmployees: 10,
       activeEmployees: 0,
     });

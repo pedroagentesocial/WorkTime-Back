@@ -5,7 +5,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { Role } from '#shared/domain/permissions.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -134,7 +140,7 @@ describe('POST /company/time-entries/{id}/void', () => {
     expect(live.body.data.working).toBe(0);
     const roster = await get(app, asAdmin, '/company/attendance/roster');
     expect(roster.body.data[0].status).toBe('out');
-    expect((await post(app, asEmployee, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('un registro anulado no cuenta para el límite diario ni para el resumen', async () => {
@@ -142,7 +148,7 @@ describe('POST /company/time-entries/{id}/void', () => {
     await prisma.company.update({ where: { id: company.id }, data: { dailyLimitMinutes: 480 } });
     const id = await addEntry(company.id, employee.id, '2026-10-07', '04:00', '12:00');
 
-    expect((await post(app, asEmployee, '/me/clock-in')).status).toBe(409);
+    expect((await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(409);
     const before = await get(app, asAdmin, '/company/attendance/summary');
     expect(before.body.data.atLimit.count).toBe(1);
 
@@ -151,7 +157,7 @@ describe('POST /company/time-entries/{id}/void', () => {
     const after = await get(app, asAdmin, '/company/attendance/summary');
     expect(after.body.data.atLimit.count).toBe(0);
     expect(after.body.data.worked.seconds).toBe(0);
-    expect((await post(app, asEmployee, '/me/clock-in')).status).toBe(201);
+    expect((await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION)).status).toBe(201);
   });
 
   it('un día con solo registros anulados no queda con reporte pendiente', async () => {
@@ -268,7 +274,7 @@ describe('motivo guardado y actividad de correcciones', () => {
 
   it('un marcaje normal no tiene motivo', async () => {
     const { app, asEmployee } = await setup();
-    const res = await post(app, asEmployee, '/me/clock-in');
+    const res = await post(app, asEmployee, '/me/clock-in', CLOCK_IN_LOCATION);
     expect(res.body.data.createdReason).toBeNull();
   });
 

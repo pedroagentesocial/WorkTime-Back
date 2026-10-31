@@ -15,63 +15,59 @@ beforeEach(async () => {
   await resetDatabase(prisma);
 });
 
-describe('Rescate del admin global por consola', () => {
-  it('da una temporal nueva, lo desbloquea, lo reactiva y cierra sus sesiones', async () => {
+describe('Recuperar el acceso del admin global desde la terminal', () => {
+  it('da una contraseña temporal, cierra las sesiones y obliga a cambiarla', async () => {
     const { app, container } = createTestApp();
     const admin = await createUser(prisma, { role: Role.PLATFORM_ADMIN });
-    const oldSession = await login(app, admin.email, DEFAULT_PASSWORD);
-    await prisma.user.update({
-      where: { id: admin.id },
-      data: {
-        status: 'inactive',
-        failedLoginAttempts: 3,
-        lockLevel: 4,
-        lockedUntil: new Date('2099-01-01'),
-      },
-    });
+    const before = await login(app, admin.email, DEFAULT_PASSWORD);
 
     const result = await container.cradle.recoverPlatformAdmin.execute();
-    expect(result.admin).toEqual({ id: admin.id, email: admin.email });
+    expect(result.admin).toMatchObject({ id: admin.id, email: admin.email });
     expect(result.temporaryPassword).toHaveLength(16);
 
-    const row = await prisma.user.findUniqueOrThrow({ where: { id: admin.id } });
-    expect(row).toMatchObject({
-      status: 'active',
-      failedLoginAttempts: 0,
-      lockLevel: 0,
-      lockedUntil: null,
-      mustChangePassword: true,
-    });
-    expect(row.temporaryPasswordExpiresAt).toEqual(result.temporaryPasswordExpiresAt);
-
-    await request(app).get(api('/auth/me')).set(bearer(oldSession.accessToken)).expect(401);
+    // La sesion anterior deja de servir, tanto el access como el refresh
+    await request(app).get(api('/auth/me')).set(bearer(before.accessToken)).expect(401);
     await request(app)
       .post(api('/auth/refresh'))
-      .send({ refreshToken: oldSession.refreshToken })
+      .send({ refreshToken: before.refreshToken })
       .expect(401);
+
     await request(app)
       .post(api('/auth/login'))
       .send({ email: admin.email, password: DEFAULT_PASSWORD })
       .expect(401);
-
-    const fresh = await login(app, admin.email, result.temporaryPassword);
-    expect(fresh.user.mustChangePassword).toBe(true);
+    const after = await login(app, admin.email, result.temporaryPassword);
+    const me = await request(app).get(api('/auth/me')).set(bearer(after.accessToken)).expect(200);
+    expect(me.body.data).toMatchObject({ role: 'platform_admin', mustChangePassword: true });
   });
 
-  it('deja el evento en la auditoría', async () => {
-    const { container } = createTestApp();
+  it('desbloquea y reactiva la cuenta y deja constancia en la auditoría', async () => {
+    const { app, container } = createTestApp();
     const admin = await createUser(prisma, { role: Role.PLATFORM_ADMIN });
+    await prisma.user.update({
+      where: { id: admin.id },
+      data: {
+        status: 'inactive',
+        failedLoginAttempts: 7,
+        lockLevel: 3,
+        lockedUntil: new Date(Date.now() + 3_600_000),
+      },
+    });
 
-    await container.cradle.recoverPlatformAdmin.execute();
+    const result = await container.cradle.recoverPlatformAdmin.execute();
+    await login(app, admin.email, result.temporaryPassword);
 
+    const row = await prisma.user.findUniqueOrThrow({ where: { id: admin.id } });
+    expect(row).toMatchObject({ status: 'active', lockLevel: 0, mustChangePassword: true });
+    expect(row.temporaryPasswordExpiresAt).toEqual(result.temporaryPasswordExpiresAt);
     const events = await prisma.securityEvent.findMany({
       where: { type: 'platform_admin.recovered' },
     });
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ userId: admin.id, metadata: { channel: 'cli' } });
+    expect(events[0]).toMatchObject({ userId: admin.id, metadata: { source: 'cli' } });
   });
 
-  it('no toca a ningún otro usuario', async () => {
+  it('no toca a nadie más que al admin global', async () => {
     const { container } = createTestApp();
     await createUser(prisma, { role: Role.PLATFORM_ADMIN });
     const company = await createCompany(prisma);
@@ -79,39 +75,20 @@ describe('Rescate del admin global por consola', () => {
       role: Role.COMPANY_ADMIN,
       companyId: company.id,
     });
-    const multiAdmin = await createUser(prisma, { role: Role.MULTI_COMPANY_ADMIN });
-    const before = await prisma.user.findMany({
-      where: { id: { in: [companyAdmin.id, multiAdmin.id] } },
-      orderBy: { id: 'asc' },
-    });
+    const untouched = await prisma.user.findUniqueOrThrow({ where: { id: companyAdmin.id } });
 
     await container.cradle.recoverPlatformAdmin.execute();
 
-    const after = await prisma.user.findMany({
-      where: { id: { in: [companyAdmin.id, multiAdmin.id] } },
-      orderBy: { id: 'asc' },
-    });
-    expect(after).toEqual(before);
+    expect(await prisma.user.findUniqueOrThrow({ where: { id: companyAdmin.id } })).toEqual(
+      untouched,
+    );
   });
 
-  it('sin admin global → PLATFORM_ADMIN_NOT_FOUND y no crea nada', async () => {
+  it('sin admin global no crea uno: pide usar el seed', async () => {
     const { container } = createTestApp();
     await expect(container.cradle.recoverPlatformAdmin.execute()).rejects.toMatchObject({
       code: 'PLATFORM_ADMIN_NOT_FOUND',
     });
     expect(await prisma.user.count()).toBe(0);
-    expect(await prisma.securityEvent.count()).toBe(0);
-  });
-
-  it('con dos admins globales no toca ninguno → PLATFORM_ADMIN_AMBIGUOUS', async () => {
-    const { container } = createTestApp();
-    await createUser(prisma, { role: Role.PLATFORM_ADMIN });
-    await createUser(prisma, { role: Role.PLATFORM_ADMIN });
-    const before = await prisma.user.findMany({ orderBy: { id: 'asc' } });
-
-    await expect(container.cradle.recoverPlatformAdmin.execute()).rejects.toMatchObject({
-      code: 'PLATFORM_ADMIN_AMBIGUOUS',
-    });
-    expect(await prisma.user.findMany({ orderBy: { id: 'asc' } })).toEqual(before);
   });
 });

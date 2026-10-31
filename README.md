@@ -9,6 +9,7 @@ npm install                 # instala y genera el cliente de Prisma
 cp .env.example .env        # completa DATABASE_URL, JWT_SECRET y SEED_ADMIN_*
 npm run db:migrate          # crea las tablas
 npm run db:seed             # crea el admin global inicial
+npm run admin:recover       # si el admin global perdió el acceso: le da una contraseña temporal
 npm run dev                 # http://localhost:3000/api/v1 · docs: http://localhost:3000/docs
 ```
 
@@ -22,17 +23,17 @@ Los tests e2e usan la conexión del `.env` sobre una BD con sufijo `_test` (p. e
 
 ## Scripts
 
-| Script | Qué hace |
-| --- | --- |
-| `dev` | Servidor con recarga automática |
-| `build` / `start` | Compila a `dist/` y lo ejecuta |
-| `check` | typecheck + lint + tests unitarios |
-| `test`, `test:unit`, `test:e2e`, `test:cov` | Tests |
-| `db:migrate` / `db:migrate:create` | Crea una migración (con o sin aplicarla) |
-| `db:deploy` | Aplica migraciones pendientes (producción) |
-| `db:seed`, `db:studio`, `db:status`, `db:generate` | Utilidades de Prisma |
-| `admin:recover` | Rescata al admin global: contraseña temporal nueva, desbloqueo y cierre de sesiones |
-| `docs:api` | Regenera `API.md` |
+| Script                                             | Qué hace                                                                                              |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `dev`                                              | Servidor con recarga automática                                                                       |
+| `build` / `start`                                  | Compila a `dist/` y lo ejecuta                                                                        |
+| `check`                                            | typecheck + lint + tests unitarios                                                                    |
+| `test`, `test:unit`, `test:e2e`, `test:cov`        | Tests                                                                                                 |
+| `db:migrate` / `db:migrate:create`                 | Crea una migración (con o sin aplicarla)                                                              |
+| `db:deploy`                                        | Aplica migraciones pendientes (producción)                                                            |
+| `db:seed`, `db:studio`, `db:status`, `db:generate` | Utilidades de Prisma                                                                                  |
+| `docs:api`                                         | Regenera `API.md`                                                                                     |
+| `admin:recover`                                    | Recupera el acceso del admin global con una contraseña temporal (en Docker: ver `docs/deployment.md`) |
 
 ## Estructura
 

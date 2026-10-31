@@ -11,14 +11,18 @@ export interface RetentionPolicy {
   readonly maxBatchesPerRun: number;
 }
 
-// Auditoria de las horas: se conserva siempre
+// Auditoria de las horas y de los sueldos: se conserva siempre
 export const KEPT_FOREVER_EVENT_TYPES: readonly string[] = [
   SecurityEventType.TIME_ENTRY_CLOCKED_IN_BY_ADMIN,
   SecurityEventType.TIME_ENTRY_CLOCKED_OUT_BY_ADMIN,
   SecurityEventType.TIME_ENTRY_CREATED_BY_ADMIN,
   SecurityEventType.TIME_ENTRY_CORRECTED_BY_ADMIN,
+  SecurityEventType.TIME_ENTRY_CORRECTED_BY_EMPLOYEE,
   SecurityEventType.TIME_ENTRY_VOIDED_BY_ADMIN,
+  SecurityEventType.CHECK_IN_VOIDED_BY_ADMIN,
   SecurityEventType.PAY_PERIOD_CLOSED,
+  SecurityEventType.EMPLOYEE_PAY_RATE_CHANGED,
+  SecurityEventType.EMPLOYEE_PAY_RATE_REMOVED,
 ];
 
 export interface PurgeResult {

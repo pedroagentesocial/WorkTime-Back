@@ -14,6 +14,8 @@ import type {
   TimeEntryView,
 } from '../application/ports/time-entry.repository.js';
 import { TimekeepingErrors } from '../application/timekeeping-errors.js';
+import type { ClockLocation } from '../domain/clock-location.js';
+import type { ClockZone } from '../domain/work-zone.js';
 import { TimeEntry, type TimeEntryCloseSource, type TimeRange } from '../domain/time-entry.js';
 
 interface Deps {
@@ -32,6 +34,13 @@ const ENTRY_SELECT = {
   closeSource: true,
   dailyLimitWaived: true,
   createdReason: true,
+  clockInLatitude: true,
+  clockInLongitude: true,
+  clockInAccuracyM: true,
+  clockInZone: true,
+  clockInSiteId: true,
+  clockInDistanceM: true,
+  clockInSite: { select: { name: true } },
 } satisfies Prisma.TimeEntrySelect;
 
 const VIEW_SELECT = {
@@ -43,6 +52,13 @@ const VIEW_SELECT = {
   source: true,
   closeSource: true,
   createdReason: true,
+  clockInLatitude: true,
+  clockInLongitude: true,
+  clockInAccuracyM: true,
+  clockInZone: true,
+  clockInSiteId: true,
+  clockInDistanceM: true,
+  clockInSite: { select: { name: true } },
   voidedAt: true,
   voidReason: true,
   voidedBy: { select: { id: true, firstName: true, lastName: true } },
@@ -81,10 +97,19 @@ export class PrismaTimeEntryRepository implements TimeEntryRepository {
   }
 
   async insert(entry: TimeEntry): Promise<void> {
-    const data = entry.snapshot();
+    const { clockInLocation, clockInZone, ...data } = entry.snapshot();
     try {
       await this.db.client.timeEntry.create({
-        data: { ...data, workDate: toDbDate(data.workDate) },
+        data: {
+          ...data,
+          workDate: toDbDate(data.workDate),
+          clockInLatitude: clockInLocation?.latitude ?? null,
+          clockInLongitude: clockInLocation?.longitude ?? null,
+          clockInAccuracyM: clockInLocation?.accuracyMeters ?? null,
+          clockInZone: clockInZone?.status ?? null,
+          clockInSiteId: clockInZone?.siteId ?? null,
+          clockInDistanceM: clockInZone?.distanceMeters ?? null,
+        },
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -310,6 +335,8 @@ export class PrismaTimeEntryRepository implements TimeEntryRepository {
     const where: Prisma.TimeEntryWhereInput = {
       companyId,
       ...(filter.employeeId && { employeeId: filter.employeeId }),
+      ...(filter.location === 'without' && { clockInLatitude: null }),
+      ...(filter.location === 'outside' && { clockInZone: 'outside' }),
       ...((filter.from ?? filter.to) && {
         workDate: {
           ...(filter.from && { gte: toDbDate(filter.from) }),
@@ -447,8 +474,55 @@ function fromDbDate(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
+type LocationColumns = Pick<EntryRow, 'clockInLatitude' | 'clockInLongitude' | 'clockInAccuracyM'>;
+
+function locationOf(row: LocationColumns): ClockLocation | null {
+  if (row.clockInLatitude === null || row.clockInLongitude === null) return null;
+  return {
+    latitude: row.clockInLatitude,
+    longitude: row.clockInLongitude,
+    accuracyMeters: row.clockInAccuracyM ?? 0,
+  };
+}
+
+type ZoneColumns = Pick<
+  EntryRow,
+  'clockInZone' | 'clockInSiteId' | 'clockInDistanceM' | 'clockInSite'
+>;
+
+function zoneOf(row: ZoneColumns): ClockZone | null {
+  if (
+    (row.clockInZone !== 'inside' && row.clockInZone !== 'outside') ||
+    row.clockInSiteId === null ||
+    row.clockInDistanceM === null
+  ) {
+    return null;
+  }
+  return {
+    status: row.clockInZone,
+    siteId: row.clockInSiteId,
+    siteName: row.clockInSite?.name ?? '',
+    distanceMeters: row.clockInDistanceM,
+  };
+}
+
 function toDomain(row: EntryRow): TimeEntry {
-  return TimeEntry.restore({ ...row, workDate: fromDbDate(row.workDate) });
+  const {
+    clockInLatitude,
+    clockInLongitude,
+    clockInAccuracyM,
+    clockInZone,
+    clockInSiteId,
+    clockInDistanceM,
+    clockInSite,
+    ...rest
+  } = row;
+  return TimeEntry.restore({
+    ...rest,
+    workDate: fromDbDate(row.workDate),
+    clockInLocation: locationOf({ clockInLatitude, clockInLongitude, clockInAccuracyM }),
+    clockInZone: zoneOf({ clockInZone, clockInSiteId, clockInDistanceM, clockInSite }),
+  });
 }
 
 function toView(row: ViewRow): TimeEntryView {
@@ -468,6 +542,8 @@ function toView(row: ViewRow): TimeEntryView {
     closeSource: row.closeSource,
     corrections: row._count.corrections,
     createdReason: row.createdReason,
+    clockInLocation: locationOf(row),
+    clockInZone: zoneOf(row),
     voided:
       row.voidedAt && row.voidReason && row.voidedBy
         ? { at: row.voidedAt, reason: row.voidReason, by: row.voidedBy }

@@ -9,7 +9,7 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 
 - La empresa (`companyId`) sale solo del token verificado, nunca del cliente.
 - Todo repositorio exige `companyId`; un recurso de otra empresa responde 404 (no se revela).
-- Llaves foráneas compuestas `(company_id, id)` en la BD: un registro no puede apuntar a datos de otra empresa.
+- Llaves foráneas compuestas `(company_id, id)` en la BD: un registro no puede apuntar a datos de otra empresa. Quien anula, corrige o cierra (`voided_by_id`, `corrected_by_id`, `closed_by_id`, también en `check_ins`) puede ser un admin multiempresa sin empresa propia, así que esa llave va a `users(id)` y el trigger `assert_actor_in_company` exige que sea usuario de la empresa o tenga membresía en ella.
 - Matriz de autorización automática (`test/authorization-matrix.test.ts`) sobre TODAS las rutas.
 
 **Autenticación y sesiones**
@@ -20,10 +20,12 @@ correcciones). Sin hallazgos críticos ni altos abiertos.
 - Refresh tokens opacos, guardados como SHA-256, rotativos, con detección de reuso (revoca la sesión entera), ligados a `tokenVersion` y con duración máxima absoluta de 30 días.
 - Admin multiempresa: la empresa activa va en el token y se valida contra `company_memberships` en cada petición (y al renovar la sesión); sin membresía vigente o con la empresa suspendida la sesión muere al instante. Una empresa ajena responde 404 igual que una inexistente. Los límites del paquete se deciden con la fila de límites bloqueada (`FOR UPDATE`), así dos altas a la vez no pasan del máximo, y las acciones sobre membresías y paquetes se auditan dentro de la transacción (`recordOrThrow`).
 - Vistas consolidadas del admin multiempresa: la lista de empresas sale siempre de `company_memberships` (solo activas) vía `PortfolioScope`; el `companyId` del cliente solo filtra dentro de esa lista y una empresa ajena responde 404. Son de solo lectura y los CSV neutralizan fórmulas como el resto.
+- Ubicación al marcar: se pide solo en la entrada y se guarda con su precisión; viene del dispositivo, así que se trata como indicio y no como prueba (puede falsearse). El servidor valida rangos, la BD exige las tres columnas o ninguna, la ven el empleado (la suya), el admin de su empresa y el multiempresa (solo sus empresas activas) y no el admin global. Las zonas de trabajo se aíslan por `company_id` (FK compuesta, 404 entre empresas), solo las gestiona quien tiene `company.settings.manage`, sus cambios se auditan dentro de la transacción y el bloqueo `enforceWorkSites` lo decide el servidor con una ubicación que sigue siendo un indicio.
+- Check-ins (registrar llegada): la misma ubicación de indicio, solo por acción explícita del empleado y nunca continua. Aislados por `company_id` (FK compuestas, 404 entre empresas), solo con `allowCheckIns` de la empresa, tope de 50 por día con el empleado bloqueado para que la concurrencia no lo salte. Son evidencia: un trigger de la BD impide borrarlos o cambiar lo registrado y solo admite anularlos una vez; la anulación exige motivo, se audita dentro de la transacción y ese evento no se purga.
 - Bloqueo tras 3 intentos fallidos: 30 s, duplicándose en cada reincidencia hasta 15 min (`users.lock_level`, se reinicia al entrar bien o tras 15 min sin reincidir), con reserva atómica del intento: ni con ráfagas en paralelo se prueban más contraseñas.
 - Login sin enumeración: mismo mensaje y trabajo equivalente para email inexistente, contraseña incorrecta o cuenta bloqueada.
 - Contraseñas temporales aleatorias (CSPRNG), vencen en 72 h, obligan a cambiarse y no sirven para renovar sesión una vez vencidas.
-- Rescate del admin global solo por consola del servidor (`npm run admin:recover`, sin ruta HTTP): temporal nueva, desbloqueo y cierre de sesiones, auditado dentro de la transacción. La contraseña del seed solo vale para el primer inicio de sesión.
+- Recuperar al admin global no tiene ruta HTTP ni pantalla a propósito: solo el comando de terminal `admin:recover` (`src/cli/recover-platform-admin.ts`), que exige entrar al servidor y tener el `.env`. Guarda solo el hash, muestra la temporal una vez, sube `token_version` (cierra todas sus sesiones), quita el bloqueo y audita `platform_admin.recovered` dentro de la transacción: si no se puede auditar, no se cambia nada.
 
 **Entrada y HTTP**
 

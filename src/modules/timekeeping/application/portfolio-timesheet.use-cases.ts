@@ -12,17 +12,27 @@ import {
 import {
   mergeCompanyTimesheets,
   portfolioPeriodDate,
+  totalsByCurrency,
+  type CurrencyTotal,
   type PortfolioTimesheet,
 } from '../domain/portfolio-timesheet.js';
-import { timesheetBodyOf } from './company-timesheet.use-cases.js';
+import {
+  pageOf,
+  paidTimesheetOf,
+  type CompanyTimesheetPayRow,
+} from './company-timesheet.use-cases.js';
 import { mapInBatches } from './portfolio-batches.js';
 import type { EmployeeDirectory } from './ports/employee-directory.js';
+import type { PayRateReader } from './ports/pay-rate.reader.js';
+import type { PeriodClosureRepository } from './ports/period-closure.repository.js';
 import type { TimeEntryRepository } from './ports/time-entry.repository.js';
 
-interface Deps {
+export interface Deps {
   portfolioScope: PortfolioScope;
   timeEntryRepository: TimeEntryRepository;
   employeeDirectory: EmployeeDirectory;
+  payRateReader: PayRateReader;
+  periodClosureRepository: PeriodClosureRepository;
   clock: Clock;
 }
 
@@ -33,7 +43,14 @@ export interface PortfolioTimesheetInput {
   readonly companyId?: string | undefined;
 }
 
-export interface PortfolioTimesheetResult extends PortfolioTimesheet {
+export interface PortfolioTimesheetPayRow extends CompanyTimesheetPayRow {
+  // Moneda del pago de la fila: la de su empresa; null si no hay pago que mostrar
+  readonly currency: string | null;
+}
+
+export interface PortfolioTimesheetResult extends PortfolioTimesheet<PortfolioTimesheetPayRow> {
+  // Un total por moneda; null si no se pidio el pago
+  readonly payTotals: CurrencyTotal[] | null;
   readonly period: PayPeriod;
   readonly previousPeriodStart: string;
   readonly nextPeriodStart: string;
@@ -49,9 +66,10 @@ export interface PortfolioTimesheetPage extends PortfolioTimesheetResult {
   readonly total: number;
 }
 
-async function portfolioTimesheetOf(
+export async function portfolioTimesheetOf(
   deps: Deps,
   { actor, date, search, companyId }: PortfolioTimesheetInput,
+  withPay: boolean,
 ): Promise<PortfolioTimesheetResult> {
   const companies = await companiesInScope(deps.portfolioScope, actor, companyId);
   const period = payPeriodOf(
@@ -62,13 +80,21 @@ async function portfolioTimesheetOf(
       ),
   );
 
-  const sheets = await mapInBatches(companies, async (company) => ({
-    company: { id: company.id, name: company.name, code: company.code },
-    sheet: await timesheetBodyOf(deps, company.id, period, search),
-  }));
+  const sheets = await mapInBatches(companies, async (company) => {
+    const closure = withPay
+      ? await deps.periodClosureRepository.find(company.id, period.start)
+      : null;
+    const sheet = await paidTimesheetOf(deps, withPay, company.id, period, search, closure);
+    const currency = sheet.pay?.currency ?? null;
+    return {
+      company: { id: company.id, name: company.name, code: company.code },
+      sheet: { ...sheet, rows: sheet.rows.map((row) => ({ ...row, currency })) },
+    };
+  });
 
   return {
     ...mergeCompanyTimesheets(period, sheets),
+    payTotals: withPay ? totalsByCurrency(sheets.map(({ sheet }) => sheet.pay)) : null,
     period,
     previousPeriodStart: previousPayPeriodStart(period),
     nextPeriodStart: nextPayPeriodStart(period),
@@ -83,15 +109,7 @@ export class GetPortfolioTimesheetUseCase implements UseCase<
   constructor(private readonly deps: Deps) {}
 
   async execute(input: PortfolioTimesheetPageInput): Promise<PortfolioTimesheetPage> {
-    const sheet = await portfolioTimesheetOf(this.deps, input);
-    const { page, limit } = input.page;
-    return {
-      ...sheet,
-      rows: sheet.rows.slice((page - 1) * limit, page * limit),
-      page,
-      limit,
-      total: sheet.rows.length,
-    };
+    return pageOf(await portfolioTimesheetOf(this.deps, input, false), input.page);
   }
 }
 
@@ -102,6 +120,6 @@ export class ExportPortfolioTimesheetUseCase implements UseCase<
   constructor(private readonly deps: Deps) {}
 
   execute(input: PortfolioTimesheetInput): Promise<PortfolioTimesheetResult> {
-    return portfolioTimesheetOf(this.deps, input);
+    return portfolioTimesheetOf(this.deps, input, false);
   }
 }

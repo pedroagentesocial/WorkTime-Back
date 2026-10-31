@@ -27,6 +27,7 @@ import {
   ListMyPendingReportsUseCase,
 } from './application/pending-reports.use-cases.js';
 import { CorrectTimeEntryUseCase } from './application/correct-time-entry.use-case.js';
+import { CorrectOwnTimeEntryUseCase } from './application/self-correction.use-case.js';
 import { ListAttendanceActivityUseCase } from './application/attendance-activity.use-case.js';
 import type { AttendanceActivityReader } from './application/ports/attendance-activity.reader.js';
 import { PrismaAttendanceActivityReader } from './infrastructure/prisma-attendance-activity.reader.js';
@@ -57,11 +58,29 @@ import {
 } from './application/timesheet.use-cases.js';
 import { PrismaEmployeeDirectory } from './infrastructure/prisma-employee-directory.js';
 import { PrismaTimeEntryRepository } from './infrastructure/prisma-time-entry.repository.js';
+import { PrismaWorkSiteReader } from './infrastructure/prisma-work-site.reader.js';
+import type { WorkSiteReader } from './application/ports/work-site.reader.js';
+import {
+  GetAttendanceMapUseCase,
+  GetPortfolioAttendanceMapUseCase,
+} from './application/attendance-map.use-cases.js';
+import type { AttendanceMapReader } from './application/ports/attendance-map.reader.js';
+import { PrismaAttendanceMapReader } from './infrastructure/prisma-attendance-map.reader.js';
 import { timekeepingRoutes } from './presentation/timekeeping.routes.js';
+import {
+  CreateCheckInUseCase,
+  ListCompanyCheckInsUseCase,
+  ListMyCheckInsUseCase,
+  VoidCheckInUseCase,
+} from './application/check-in.use-cases.js';
+import type { CheckInRepository } from './application/ports/check-in.repository.js';
+import { PrismaCheckInRepository } from './infrastructure/prisma-check-in.repository.js';
+import { checkInRoutes } from './presentation/check-in.routes.js';
 import {
   ExportPortfolioDailyReportsUseCase,
   ListPortfolioDailyReportsUseCase,
 } from './application/portfolio-daily-reports.use-cases.js';
+import { GetPortfolioLiveUseCase } from './application/portfolio-live.use-case.js';
 import { GetPortfolioSummaryUseCase } from './application/portfolio-summary.use-case.js';
 import {
   ExportPortfolioTimesheetUseCase,
@@ -70,10 +89,21 @@ import {
 import type { PortfolioDailyReportReader } from './application/ports/portfolio-daily-report.reader.js';
 import { PrismaPortfolioDailyReportReader } from './infrastructure/prisma-portfolio-daily-report.reader.js';
 import { portfolioRoutes } from './presentation/portfolio.routes.js';
+import { payrollRoutes } from './presentation/payroll.routes.js';
+import {
+  ExportCompanyPayrollUseCase,
+  ExportPortfolioPayrollUseCase,
+  GetCompanyPayrollUseCase,
+  GetPortfolioPayrollUseCase,
+} from './application/payroll.use-cases.js';
+
+import type { PayRateReader } from './application/ports/pay-rate.reader.js';
+import { PrismaPayRateReader } from './infrastructure/prisma-pay-rate.reader.js';
 
 declare module '#shared/composition/container.js' {
   interface Cradle {
     timeEntryRepository: TimeEntryRepository;
+    workSiteReader: WorkSiteReader;
     dailyReportRepository: DailyReportRepository;
     saveMyDailyReport: SaveMyDailyReportUseCase;
     listMyDailyReports: ListMyDailyReportsUseCase;
@@ -90,6 +120,7 @@ declare module '#shared/composition/container.js' {
     listTimeEntryCorrections: ListTimeEntryCorrectionsUseCase;
     getLiveAttendance: GetLiveAttendanceUseCase;
     correctTimeEntry: CorrectTimeEntryUseCase;
+    correctOwnTimeEntry: CorrectOwnTimeEntryUseCase;
     closeEntryOnDeactivation: CloseEntryOnDeactivationUseCase;
     closeEntriesOverLimit: CloseEntriesOverLimitUseCase;
     closeEntriesOfInactiveEmployees: CloseEntriesOfInactiveEmployeesUseCase;
@@ -101,6 +132,7 @@ declare module '#shared/composition/container.js' {
     createManualTimeEntry: CreateManualTimeEntryUseCase;
     voidTimeEntry: VoidTimeEntryUseCase;
     periodClosureRepository: PeriodClosureRepository;
+    payRateReader: PayRateReader;
     getPayPeriodStatus: GetPayPeriodStatusUseCase;
     closePayPeriod: ClosePayPeriodUseCase;
     attendanceActivityReader: AttendanceActivityReader;
@@ -112,10 +144,23 @@ declare module '#shared/composition/container.js' {
     exportCompanyTimesheet: ExportCompanyTimesheetUseCase;
     portfolioDailyReportReader: PortfolioDailyReportReader;
     getPortfolioSummary: GetPortfolioSummaryUseCase;
+    getPortfolioLive: GetPortfolioLiveUseCase;
+    attendanceMapReader: AttendanceMapReader;
+    getAttendanceMap: GetAttendanceMapUseCase;
+    getPortfolioAttendanceMap: GetPortfolioAttendanceMapUseCase;
     getPortfolioTimesheet: GetPortfolioTimesheetUseCase;
     exportPortfolioTimesheet: ExportPortfolioTimesheetUseCase;
+    getCompanyPayroll: GetCompanyPayrollUseCase;
+    exportCompanyPayroll: ExportCompanyPayrollUseCase;
+    getPortfolioPayroll: GetPortfolioPayrollUseCase;
+    exportPortfolioPayroll: ExportPortfolioPayrollUseCase;
     listPortfolioDailyReports: ListPortfolioDailyReportsUseCase;
     exportPortfolioDailyReports: ExportPortfolioDailyReportsUseCase;
+    checkInRepository: CheckInRepository;
+    createCheckIn: CreateCheckInUseCase;
+    listMyCheckIns: ListMyCheckInsUseCase;
+    listCompanyCheckIns: ListCompanyCheckInsUseCase;
+    voidCheckIn: VoidCheckInUseCase;
   }
 }
 
@@ -125,6 +170,7 @@ export const timekeepingModule: AppModule = {
   register(container) {
     container.register({
       timeEntryRepository: asClass(PrismaTimeEntryRepository).singleton(),
+      workSiteReader: asClass(PrismaWorkSiteReader).singleton(),
       dailyReportRepository: asClass(PrismaDailyReportRepository).singleton(),
       saveMyDailyReport: asClass(SaveMyDailyReportUseCase).singleton(),
       listMyDailyReports: asClass(ListMyDailyReportsUseCase).singleton(),
@@ -141,6 +187,7 @@ export const timekeepingModule: AppModule = {
       listTimeEntryCorrections: asClass(ListTimeEntryCorrectionsUseCase).singleton(),
       getLiveAttendance: asClass(GetLiveAttendanceUseCase).singleton(),
       correctTimeEntry: asClass(CorrectTimeEntryUseCase).singleton(),
+      correctOwnTimeEntry: asClass(CorrectOwnTimeEntryUseCase).singleton(),
       closeEntryOnDeactivation: asClass(CloseEntryOnDeactivationUseCase).singleton(),
       closeEntriesOverLimit: asClass(CloseEntriesOverLimitUseCase).singleton(),
       closeEntriesOfInactiveEmployees: asClass(CloseEntriesOfInactiveEmployeesUseCase).singleton(),
@@ -152,6 +199,7 @@ export const timekeepingModule: AppModule = {
       createManualTimeEntry: asClass(CreateManualTimeEntryUseCase).singleton(),
       voidTimeEntry: asClass(VoidTimeEntryUseCase).singleton(),
       periodClosureRepository: asClass(PrismaPeriodClosureRepository).singleton(),
+      payRateReader: asClass(PrismaPayRateReader).singleton(),
       getPayPeriodStatus: asClass(GetPayPeriodStatusUseCase).singleton(),
       closePayPeriod: asClass(ClosePayPeriodUseCase).singleton(),
       attendanceActivityReader: asClass(PrismaAttendanceActivityReader).singleton(),
@@ -163,10 +211,23 @@ export const timekeepingModule: AppModule = {
       exportCompanyTimesheet: asClass(ExportCompanyTimesheetUseCase).singleton(),
       portfolioDailyReportReader: asClass(PrismaPortfolioDailyReportReader).singleton(),
       getPortfolioSummary: asClass(GetPortfolioSummaryUseCase).singleton(),
+      getPortfolioLive: asClass(GetPortfolioLiveUseCase).singleton(),
+      attendanceMapReader: asClass(PrismaAttendanceMapReader).singleton(),
+      getAttendanceMap: asClass(GetAttendanceMapUseCase).singleton(),
+      getPortfolioAttendanceMap: asClass(GetPortfolioAttendanceMapUseCase).singleton(),
       getPortfolioTimesheet: asClass(GetPortfolioTimesheetUseCase).singleton(),
       exportPortfolioTimesheet: asClass(ExportPortfolioTimesheetUseCase).singleton(),
+      getCompanyPayroll: asClass(GetCompanyPayrollUseCase).singleton(),
+      exportCompanyPayroll: asClass(ExportCompanyPayrollUseCase).singleton(),
+      getPortfolioPayroll: asClass(GetPortfolioPayrollUseCase).singleton(),
+      exportPortfolioPayroll: asClass(ExportPortfolioPayrollUseCase).singleton(),
       listPortfolioDailyReports: asClass(ListPortfolioDailyReportsUseCase).singleton(),
       exportPortfolioDailyReports: asClass(ExportPortfolioDailyReportsUseCase).singleton(),
+      checkInRepository: asClass(PrismaCheckInRepository).singleton(),
+      createCheckIn: asClass(CreateCheckInUseCase).singleton(),
+      listMyCheckIns: asClass(ListMyCheckInsUseCase).singleton(),
+      listCompanyCheckIns: asClass(ListCompanyCheckInsUseCase).singleton(),
+      voidCheckIn: asClass(VoidCheckInUseCase).singleton(),
     });
   },
 
@@ -193,5 +254,7 @@ export const timekeepingModule: AppModule = {
   routes: (container) => [
     ...timekeepingRoutes(container.cradle),
     ...portfolioRoutes(container.cradle),
+    ...payrollRoutes(container.cradle),
+    ...checkInRoutes(container.cradle),
   ],
 };

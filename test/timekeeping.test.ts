@@ -6,7 +6,13 @@ import { Role } from '#shared/domain/permissions.js';
 import { AUTO_CLOSE_REASON } from '#modules/timekeeping/application/close-entry-on-deactivation.use-case.js';
 import type { FakeClock } from './helpers/fake-clock.js';
 import { createTestPrisma, resetDatabase } from './helpers/database.js';
-import { createCompany, createEmployee, createUser, DEFAULT_PASSWORD } from './helpers/fixtures.js';
+import {
+  createCompany,
+  createEmployee,
+  createUser,
+  DEFAULT_PASSWORD,
+  CLOCK_IN_LOCATION,
+} from './helpers/fixtures.js';
 import { api, bearer, createTestApp, login } from './helpers/test-app.js';
 
 const prisma = createTestPrisma();
@@ -49,7 +55,8 @@ function setTime(clock: FakeClock, iso: string) {
 async function clockIn(app: Express, as: As) {
   return request(app)
     .post(api('/me/clock-in'))
-    .set(await as());
+    .set(await as())
+    .send(CLOCK_IN_LOCATION);
 }
 
 async function clockOut(app: Express, as: As) {
@@ -127,7 +134,7 @@ describe('Marcar entrada y salida', () => {
     const auth = await asEmployee();
 
     const results = await Promise.all(
-      [1, 2, 3].map(() => request(app).post(api('/me/clock-in')).set(auth)),
+      [1, 2, 3].map(() => request(app).post(api('/me/clock-in')).set(auth).send(CLOCK_IN_LOCATION)),
     );
     expect(results.filter((r) => r.status === 201)).toHaveLength(1);
     expect(results.filter((r) => r.status === 409).map((r) => r.body.error.code)).toEqual([

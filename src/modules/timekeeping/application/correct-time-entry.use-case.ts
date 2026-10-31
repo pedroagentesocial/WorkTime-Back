@@ -12,6 +12,7 @@ import { ValidationError } from '#shared/domain/errors.js';
 import { assertPeriodsOpen } from './period-guard.js';
 import type { PeriodClosureRepository } from './ports/period-closure.repository.js';
 import type { TimeEntryRepository, TimeEntryView } from './ports/time-entry.repository.js';
+import type { TimeEntry, TimeRange } from '../domain/time-entry.js';
 import { TimekeepingErrors } from './timekeeping-errors.js';
 
 export const CORRECTION_REASON_LIMITS = { min: 5, max: 500 } as const;
@@ -39,7 +40,7 @@ export interface CorrectTimeEntryInput {
   readonly reason: string;
 }
 
-interface Deps {
+export interface Deps {
   timeEntryRepository: TimeEntryRepository;
   periodClosureRepository: PeriodClosureRepository;
   transactions: TransactionRunner;
@@ -48,77 +49,107 @@ interface Deps {
   securityEvents: SecurityEventRecorder;
 }
 
+export type CorrectionEventType =
+  | typeof SecurityEventType.TIME_ENTRY_CORRECTED_BY_ADMIN
+  | typeof SecurityEventType.TIME_ENTRY_CORRECTED_BY_EMPLOYEE;
+
+export interface CorrectionRequest extends CorrectTimeEntryInput {
+  readonly companyId: string;
+  readonly eventType: CorrectionEventType;
+  // Solo el marcaje de este empleado; otro responde que no existe
+  readonly ownerEmployeeId?: string | undefined;
+  // Reglas extra de quien corrige, con el marcaje ya cambiado en memoria y como estaba antes
+  readonly guard?: (
+    entry: TimeEntry,
+    previous: TimeRange,
+    previousWorkDate: string,
+  ) => Promise<void> | void;
+}
+
+// La correccion de un marcaje: la comparten el admin y el empleado con permiso
+export async function correctTimeEntry(
+  deps: Deps,
+  request: CorrectionRequest,
+): Promise<TimeEntryView> {
+  const { timeEntryRepository: entries } = deps;
+  const { companyId } = request;
+  const reason = normalizeReason(request.reason);
+
+  await deps.transactions.run(async () => {
+    const entry = await entries.findById(companyId, request.timeEntryId);
+    if (!entry || (request.ownerEmployeeId && entry.employeeId !== request.ownerEmployeeId)) {
+      const view = entry ? null : await entries.findViewById(companyId, request.timeEntryId);
+      throw view?.voided
+        ? TimekeepingErrors.timeEntryVoided()
+        : TimekeepingErrors.timeEntryNotFound();
+    }
+    await entries.lockEmployee(companyId, entry.employeeId);
+
+    const previousWorkDate = entry.workDate;
+    const previous = entry.correct(
+      { clockInAt: request.clockInAt, clockOutAt: request.clockOutAt },
+      deps.clock.now(),
+    );
+    await request.guard?.(entry, previous, previousWorkDate);
+    // Ni el dia de origen ni el de destino pueden estar en un periodo cerrado
+    await assertPeriodsOpen(deps.periodClosureRepository, companyId, [
+      previousWorkDate,
+      entry.workDate,
+    ]);
+    if (
+      await entries.hasOverlap(
+        entry.employeeId,
+        { from: entry.clockInAt, to: entry.clockOutAt },
+        entry.id,
+      )
+    ) {
+      throw TimekeepingErrors.overlap();
+    }
+
+    if (!(await entries.update(entry, previous))) {
+      throw TimekeepingErrors.changedConcurrently();
+    }
+    await entries.addCorrection({
+      id: deps.idGenerator.generate(),
+      companyId,
+      timeEntryId: entry.id,
+      correctedById: request.actor.userId,
+      previousClockInAt: previous.clockInAt,
+      previousClockOutAt: previous.clockOutAt,
+      newClockInAt: entry.clockInAt,
+      newClockOutAt: entry.clockOutAt,
+      reason,
+    });
+    await deps.securityEvents.recordOrThrow({
+      type: request.eventType,
+      userId: request.actor.userId,
+      companyId,
+      client: request.client,
+      metadata: {
+        employeeId: entry.employeeId,
+        timeEntryId: request.timeEntryId,
+        previousClockInAt: previous.clockInAt.toISOString(),
+        previousClockOutAt: previous.clockOutAt?.toISOString() ?? null,
+        clockInAt: entry.clockInAt.toISOString(),
+        clockOutAt: entry.clockOutAt?.toISOString() ?? null,
+        reason,
+      },
+    });
+  });
+
+  const view = await entries.findViewById(companyId, request.timeEntryId);
+  if (!view) throw TimekeepingErrors.timeEntryNotFound();
+  return view;
+}
+
 export class CorrectTimeEntryUseCase implements UseCase<CorrectTimeEntryInput, TimeEntryView> {
   constructor(private readonly deps: Deps) {}
 
-  async execute(input: CorrectTimeEntryInput): Promise<TimeEntryView> {
-    const { timeEntryRepository: entries } = this.deps;
-    const companyId = companyIdOf(input.actor);
-    const reason = normalizeReason(input.reason);
-
-    await this.deps.transactions.run(async () => {
-      const entry = await entries.findById(companyId, input.timeEntryId);
-      if (!entry) {
-        const view = await entries.findViewById(companyId, input.timeEntryId);
-        throw view?.voided
-          ? TimekeepingErrors.timeEntryVoided()
-          : TimekeepingErrors.timeEntryNotFound();
-      }
-      await entries.lockEmployee(companyId, entry.employeeId);
-
-      const previousWorkDate = entry.workDate;
-      const previous = entry.correct(
-        { clockInAt: input.clockInAt, clockOutAt: input.clockOutAt },
-        this.deps.clock.now(),
-      );
-      // Ni el dia de origen ni el de destino pueden estar en un periodo cerrado
-      await assertPeriodsOpen(this.deps.periodClosureRepository, companyId, [
-        previousWorkDate,
-        entry.workDate,
-      ]);
-      if (
-        await entries.hasOverlap(
-          entry.employeeId,
-          { from: entry.clockInAt, to: entry.clockOutAt },
-          entry.id,
-        )
-      ) {
-        throw TimekeepingErrors.overlap();
-      }
-
-      if (!(await entries.update(entry, previous))) {
-        throw TimekeepingErrors.changedConcurrently();
-      }
-      await entries.addCorrection({
-        id: this.deps.idGenerator.generate(),
-        companyId,
-        timeEntryId: entry.id,
-        correctedById: input.actor.userId,
-        previousClockInAt: previous.clockInAt,
-        previousClockOutAt: previous.clockOutAt,
-        newClockInAt: entry.clockInAt,
-        newClockOutAt: entry.clockOutAt,
-        reason,
-      });
-      await this.deps.securityEvents.recordOrThrow({
-        type: SecurityEventType.TIME_ENTRY_CORRECTED_BY_ADMIN,
-        userId: input.actor.userId,
-        companyId,
-        client: input.client,
-        metadata: {
-          employeeId: entry.employeeId,
-          timeEntryId: input.timeEntryId,
-          previousClockInAt: previous.clockInAt.toISOString(),
-          previousClockOutAt: previous.clockOutAt?.toISOString() ?? null,
-          clockInAt: entry.clockInAt.toISOString(),
-          clockOutAt: entry.clockOutAt?.toISOString() ?? null,
-          reason,
-        },
-      });
+  execute(input: CorrectTimeEntryInput): Promise<TimeEntryView> {
+    return correctTimeEntry(this.deps, {
+      ...input,
+      companyId: companyIdOf(input.actor),
+      eventType: SecurityEventType.TIME_ENTRY_CORRECTED_BY_ADMIN,
     });
-
-    const view = await entries.findViewById(companyId, input.timeEntryId);
-    if (!view) throw TimekeepingErrors.timeEntryNotFound();
-    return view;
   }
 }

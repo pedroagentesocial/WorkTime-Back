@@ -7,7 +7,9 @@ export const ATTENDANCE_ACTIVITY_TYPES = [
   SecurityEventType.TIME_ENTRY_CLOCKED_OUT_BY_ADMIN,
   SecurityEventType.TIME_ENTRY_CREATED_BY_ADMIN,
   SecurityEventType.TIME_ENTRY_CORRECTED_BY_ADMIN,
+  SecurityEventType.TIME_ENTRY_CORRECTED_BY_EMPLOYEE,
   SecurityEventType.TIME_ENTRY_VOIDED_BY_ADMIN,
+  SecurityEventType.CHECK_IN_VOIDED_BY_ADMIN,
   SecurityEventType.PAY_PERIOD_CLOSED,
 ] as const;
 
@@ -22,6 +24,8 @@ export interface AttendanceActivityFilter {
 
 export interface AttendanceActivityDetails {
   readonly timeEntryId?: string;
+  readonly checkInId?: string;
+  readonly checkedInAt?: string;
   readonly reason?: string;
   readonly clockInAt?: string;
   readonly clockOutAt?: string | null;

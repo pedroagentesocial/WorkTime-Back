@@ -1,19 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SecurityEventInput } from '#shared/application/ports/security-event-recorder.js';
-import type { PlatformAdminView } from './ports/platform-admin.repository.js';
+import { PlatformErrors } from './platform-errors.js';
+import type { PlatformAdminRepository } from './ports/platform-admin.repository.js';
 import { RecoverPlatformAdminUseCase } from './recover-platform-admin.use-case.js';
 
-const expiresAt = new Date('2026-10-23T12:00:00Z');
+const admin = { id: 'admin-1', email: 'admin@worktime.com', firstName: 'Ana', lastName: 'Ruiz' };
+const expiresAt = new Date('2026-10-23T00:00:00Z');
 
-function build(admins: PlatformAdminView[], options: { auditFails?: boolean } = {}) {
-  const recover = vi.fn(async () => {});
+function build(options: { exists?: boolean; auditFails?: boolean } = {}) {
+  const recoverAccess = vi.fn(async () => (options.exists === false ? null : admin));
   const events: SecurityEventInput[] = [];
   const useCase = new RecoverPlatformAdminUseCase({
-    platformAdminRepository: { listAll: async () => admins, recover },
+    platformAdminRepository: { recoverAccess } satisfies PlatformAdminRepository,
     temporaryPasswords: {
-      issue: async () => ({ password: 'temporal', passwordHash: 'hash', expiresAt }),
+      issue: async () => ({ password: 'temporal-1234567', passwordHash: 'hash', expiresAt }),
     } as never,
-    transactions: { run: (work) => work() },
     securityEvents: {
       record: async () => {},
       recordOrThrow: async (event) => {
@@ -21,42 +22,43 @@ function build(admins: PlatformAdminView[], options: { auditFails?: boolean } = 
         events.push(event);
       },
     },
+    transactions: { run: <T>(work: () => Promise<T>) => work() },
   });
-  return { useCase, recover, events };
+  return { useCase, recoverAccess, events };
 }
 
-const admin = { id: 'admin-1', email: 'admin@worktime.com' };
-
 describe('RecoverPlatformAdminUseCase', () => {
-  it('restablece al admin global y devuelve la temporal una vez', async () => {
-    const { useCase, recover, events } = build([admin]);
+  it('guarda solo el hash y devuelve la contraseña temporal una vez', async () => {
+    const { useCase, recoverAccess } = build();
+
     const result = await useCase.execute();
 
+    expect(recoverAccess).toHaveBeenCalledWith({ passwordHash: 'hash', expiresAt });
     expect(result).toEqual({
       admin,
-      temporaryPassword: 'temporal',
+      temporaryPassword: 'temporal-1234567',
       temporaryPasswordExpiresAt: expiresAt,
     });
-    expect(recover).toHaveBeenCalledWith('admin-1', { passwordHash: 'hash', expiresAt });
+  });
+
+  it('deja constancia de que se recuperó desde la terminal', async () => {
+    const { useCase, events } = build();
+    await useCase.execute();
     expect(events).toEqual([
-      { type: 'platform_admin.recovered', userId: 'admin-1', metadata: { channel: 'cli' } },
+      { type: 'platform_admin.recovered', userId: 'admin-1', metadata: { source: 'cli' } },
     ]);
   });
 
-  it('sin admin global → PLATFORM_ADMIN_NOT_FOUND', async () => {
-    const { useCase, recover } = build([]);
-    await expect(useCase.execute()).rejects.toMatchObject({ code: 'PLATFORM_ADMIN_NOT_FOUND' });
-    expect(recover).not.toHaveBeenCalled();
+  it('sin admin global avisa que hay que crearlo con el seed', async () => {
+    const { useCase, events } = build({ exists: false });
+    await expect(useCase.execute()).rejects.toMatchObject({
+      code: PlatformErrors.platformAdminNotFound().code,
+    });
+    expect(events).toHaveLength(0);
   });
 
-  it('con más de un admin global no toca ninguno → PLATFORM_ADMIN_AMBIGUOUS', async () => {
-    const { useCase, recover } = build([admin, { id: 'admin-2', email: 'otro@worktime.com' }]);
-    await expect(useCase.execute()).rejects.toMatchObject({ code: 'PLATFORM_ADMIN_AMBIGUOUS' });
-    expect(recover).not.toHaveBeenCalled();
-  });
-
-  it('si no se puede auditar, falla y no entrega la contraseña', async () => {
-    const { useCase } = build([admin], { auditFails: true });
+  it('si no se puede auditar, falla y la transacción no se confirma', async () => {
+    const { useCase } = build({ auditFails: true });
     await expect(useCase.execute()).rejects.toThrow('sin auditoria');
   });
 });

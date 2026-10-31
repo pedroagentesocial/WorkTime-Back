@@ -587,6 +587,100 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
   });
 });
 
+describe('Acciones sobre las horas en la empresa activa', () => {
+  // Quien firma la accion es el admin multiempresa, que no tiene empresa propia
+  async function setupInCompany() {
+    const { app, clock } = createTestApp();
+    clock.advance(new Date('2026-10-07T18:00:00Z').getTime() - clock.now().getTime());
+    const company = await createCompany(prisma);
+    const { employee } = await createEmployee(prisma, company.id);
+    const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
+    const session = await multiAdminSession(app, laura);
+    const auth = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    return { app, company, employee, laura, auth };
+  }
+
+  async function addEntry(
+    companyId: string,
+    employeeId: string,
+    date: string,
+    to: string | null = '12:00',
+  ) {
+    const id = uuidv7();
+    await prisma.timeEntry.create({
+      data: {
+        id,
+        companyId,
+        employeeId,
+        clockInAt: new Date(`${date}T08:00:00-06:00`),
+        clockOutAt: to ? new Date(`${date}T${to}:00-06:00`) : null,
+        timezone: 'America/Denver',
+        workDate: new Date(`${date}T00:00:00.000Z`),
+        source: 'web',
+      },
+    });
+    return id;
+  }
+
+  it('corrige y anula marcajes a su nombre', async () => {
+    const { app, company, employee, laura, auth } = await setupInCompany();
+    const corrected = await addEntry(company.id, employee.id, '2026-10-06');
+    const voided = await addEntry(company.id, employee.id, '2026-10-05');
+
+    await request(app)
+      .patch(api(`/company/time-entries/${corrected}`))
+      .set(auth)
+      .send({ clockOutAt: '2026-10-06T13:00:00-06:00', reason: 'Ajuste de salida' })
+      .expect(200);
+    const corrections = await request(app)
+      .get(api(`/company/time-entries/${corrected}/corrections`))
+      .set(auth)
+      .expect(200);
+    expect(corrections.body.data[0]).toMatchObject({ correctedBy: { id: laura.id } });
+
+    const res = await request(app)
+      .post(api(`/company/time-entries/${voided}/void`))
+      .set(auth)
+      .send({ reason: 'Se creó por duplicado' })
+      .expect(200);
+    expect(res.body.data).toMatchObject({ status: 'voided', voidedBy: { id: laura.id } });
+  });
+
+  it('cierra un periodo terminado a su nombre', async () => {
+    const { app, company, employee, laura, auth } = await setupInCompany();
+    await addEntry(company.id, employee.id, '2026-09-22');
+
+    const res = await request(app)
+      .post(api('/company/periods/close'))
+      .set(auth)
+      .send({ date: '2026-09-30' })
+      .expect(201);
+    expect(res.body.data).toMatchObject({ totalHours: 4, closedBy: { id: laura.id } });
+  });
+
+  it('al desactivar a un empleado con la entrada abierta la cierra a su nombre', async () => {
+    const { app, company, employee, laura, auth } = await setupInCompany();
+    const id = await addEntry(company.id, employee.id, '2026-10-07', null);
+
+    await request(app)
+      .patch(api(`/company/employees/${employee.id}/status`))
+      .set(auth)
+      .send({ status: 'inactive' })
+      .expect(200);
+
+    const entry = await request(app)
+      .get(api(`/company/time-entries/${id}`))
+      .set(auth)
+      .expect(200);
+    expect(entry.body.data).toMatchObject({ status: 'closed', corrections: 1 });
+    const corrections = await request(app)
+      .get(api(`/company/time-entries/${id}/corrections`))
+      .set(auth)
+      .expect(200);
+    expect(corrections.body.data[0]).toMatchObject({ correctedBy: { id: laura.id } });
+  });
+});
+
 describe('Crear empresas dentro del paquete', () => {
   it('crea la empresa con su admin, con el máximo de empleados del paquete, y se la asigna', async () => {
     const { app } = createTestApp();
@@ -752,6 +846,82 @@ describe('Reglas de la base de datos', () => {
       }),
       'users_company_matches_role',
     );
+  });
+
+  it('quien anula, corrige o cierra debe tener membresía en la empresa', async () => {
+    const company = await createCompany(prisma);
+    const { employee } = await createEmployee(prisma, company.id);
+    const member = await createMultiAdmin(prisma, { companyIds: [company.id] });
+    const outsider = await createMultiAdmin(prisma);
+    const entry = await prisma.timeEntry.create({
+      data: {
+        id: uuidv7(),
+        companyId: company.id,
+        employeeId: employee.id,
+        clockInAt: new Date('2026-09-22T14:00:00Z'),
+        clockOutAt: new Date('2026-09-22T18:00:00Z'),
+        timezone: 'America/Denver',
+        workDate: new Date('2026-09-22T00:00:00.000Z'),
+        source: 'web',
+      },
+    });
+    const checkIn = await prisma.checkIn.create({
+      data: {
+        id: uuidv7(),
+        companyId: company.id,
+        employeeId: employee.id,
+        checkedInAt: new Date('2026-09-22T15:00:00Z'),
+        timezone: 'America/Denver',
+        workDate: new Date('2026-09-22T00:00:00.000Z'),
+        latitude: 40.76,
+        longitude: -111.89,
+        accuracyM: 10,
+      },
+    });
+    const correction = (correctedById: string) =>
+      prisma.timeEntryCorrection.create({
+        data: {
+          id: uuidv7(),
+          companyId: company.id,
+          timeEntryId: entry.id,
+          correctedById,
+          previousClockInAt: entry.clockInAt,
+          newClockInAt: entry.clockInAt,
+          reason: 'Ajuste de prueba',
+        },
+      });
+    const closure = (closedById: string) =>
+      prisma.payPeriodClosure.create({
+        data: {
+          id: uuidv7(),
+          companyId: company.id,
+          periodStart: new Date('2026-09-21T00:00:00.000Z'),
+          periodEnd: new Date('2026-10-04T00:00:00.000Z'),
+          totalCentihours: 0n,
+          closedById,
+        },
+      });
+    const voiding = (userId: string) => ({
+      voidedAt: new Date(),
+      voidedById: userId,
+      voidReason: 'Motivo de prueba',
+    });
+
+    await expectRejected(correction(outsider.id), 'assert_actor_in_company');
+    await expectRejected(closure(outsider.id), 'assert_actor_in_company');
+    await expectRejected(
+      prisma.timeEntry.update({ where: { id: entry.id }, data: voiding(outsider.id) }),
+      'assert_actor_in_company',
+    );
+    await expectRejected(
+      prisma.checkIn.update({ where: { id: checkIn.id }, data: voiding(outsider.id) }),
+      'assert_actor_in_company',
+    );
+
+    await correction(member.id);
+    await prisma.timeEntry.update({ where: { id: entry.id }, data: voiding(member.id) });
+    await prisma.checkIn.update({ where: { id: checkIn.id }, data: voiding(member.id) });
+    await closure(member.id);
   });
 
   it('los límites del paquete tienen un rango válido', async () => {

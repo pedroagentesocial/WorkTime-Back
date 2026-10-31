@@ -59,6 +59,14 @@ model Company {
   maxEmployees             Int           @map("max_employees")
   dailyLimitMinutes        Int?          @map("daily_limit_minutes")
   requireDailyReport       Boolean       @default(true) @map("require_daily_report")
+  /// Si es true, solo se puede marcar la entrada dentro de una zona de trabajo activa
+  enforceWorkSites         Boolean       @default(false) @map("enforce_work_sites")
+  /// Si es true, los empleados pueden registrar su llegada a un lugar sin marcar entrada
+  allowCheckIns            Boolean       @default(false) @map("allow_check_ins")
+  /// Moneda ISO 4217 en la que cobran todos sus empleados
+  currency                 String        @default("USD") @db.Char(3)
+  /// Cuantos dias hacia atras pueden corregir sus horas los empleados con permiso
+  selfEditDays             Int           @default(7) @map("self_edit_days")
   dailyReportRequiredSince DateTime      @default(dbgenerated("CURRENT_DATE")) @map("daily_report_required_since") @db.Date
   status                   CompanyStatus @default(active)
   createdAt                DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
@@ -72,6 +80,10 @@ model Company {
   dailyReports         DailyReport[]
   dailyReportRevisions DailyReportRevision[]
   payPeriodClosures    PayPeriodClosure[]
+  workSites            WorkSite[]
+  checkIns             CheckIn[]
+  payRates             EmployeePayRate[]
+  closurePays          PayPeriodClosurePay[]
   memberships          CompanyMembership[]
   refreshTokens        RefreshToken[]
 
@@ -106,6 +118,8 @@ model User {
   memberships       CompanyMembership[]
   corrections       TimeEntryCorrection[]
   voidedEntries     TimeEntry[]           @relation("TimeEntryVoidedBy")
+  voidedCheckIns    CheckIn[]             @relation("CheckInVoidedBy")
+  changedPayRates   EmployeePayRate[]     @relation("PayRateChangedBy")
   closedPeriods     PayPeriodClosure[]
   securityEvents    SecurityEvent[]
 
@@ -195,14 +209,23 @@ model Employee {
   phone             String?   @db.VarChar(30)
   timezone          String?   @db.VarChar(64)
   dailyLimitMinutes Int?      @map("daily_limit_minutes")
+  /// Check-in propio: null hereda el de la empresa, true lo permite y false lo prohibe
+  allowCheckIns     Boolean?  @map("allow_check_ins")
+  /// Permiso del admin para que corrija sus propias horas; selfEditUntil es el ultimo dia, null sin vencimiento
+  allowSelfEdit     Boolean   @default(false) @map("allow_self_edit")
+  selfEditUntil     DateTime? @map("self_edit_until") @db.Date
   hiredAt           DateTime? @map("hired_at") @db.Date
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  company      Company       @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  user         User          @relation(fields: [companyId, userId], references: [companyId, id], onDelete: Restrict)
-  timeEntries  TimeEntry[]
-  dailyReports DailyReport[]
+  company       Company                @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  user          User                   @relation(fields: [companyId, userId], references: [companyId, id], onDelete: Restrict)
+  timeEntries   TimeEntry[]
+  dailyReports  DailyReport[]
+  checkIns      CheckIn[]
+  payRates      EmployeePayRate[]
+  closurePays   PayPeriodClosurePay[]
+  inactiveSpans EmployeeInactiveSpan[]
 
   @@unique([companyId, employeeCode])
   @@unique([companyId, userId])
@@ -223,6 +246,14 @@ model TimeEntry {
   closeSource      TimeEntryCloseSource? @map("close_source")
   dailyLimitWaived Boolean               @default(false) @map("daily_limit_waived")
   createdReason    String?               @map("created_reason") @db.VarChar(500)
+  /// Donde estaba el empleado al marcar la entrada; las tres columnas van juntas o ninguna
+  clockInLatitude  Float?                @map("clock_in_latitude")
+  clockInLongitude Float?                @map("clock_in_longitude")
+  clockInAccuracyM Float?                @map("clock_in_accuracy_m")
+  /// Resultado de la zona al marcar: inside u outside, la zona mas cercana y a cuantos metros
+  clockInZone      String?               @map("clock_in_zone") @db.VarChar(10)
+  clockInSiteId    String?               @map("clock_in_site_id") @db.Uuid
+  clockInDistanceM Int?                  @map("clock_in_distance_m")
   /// Anulacion: el registro no se borra, deja de contar. Los tres campos van juntos
   voidedAt         DateTime?             @map("voided_at") @db.Timestamptz(3)
   voidedById       String?               @map("voided_by_id") @db.Uuid
@@ -230,9 +261,10 @@ model TimeEntry {
   createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
 
-  voidedBy    User?                 @relation("TimeEntryVoidedBy", fields: [companyId, voidedById], references: [companyId, id], onDelete: Restrict)
+  voidedBy    User?                 @relation("TimeEntryVoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
   company     Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
   employee    Employee              @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Restrict)
+  clockInSite WorkSite?             @relation(fields: [companyId, clockInSiteId], references: [companyId, id], onDelete: Restrict)
   corrections TimeEntryCorrection[]
 
   /// Evita dos entradas abiertas por doble clic o concurrencia
@@ -245,6 +277,63 @@ model TimeEntry {
   @@map("time_entries")
 }
 
+/// Zona de trabajo: un punto con radio donde se permite marcar la entrada. Se desactiva, no se borra
+model WorkSite {
+  id        String   @id @default(uuid(7)) @db.Uuid
+  companyId String   @map("company_id") @db.Uuid
+  name      String   @db.VarChar(100)
+  latitude  Float
+  longitude Float
+  radiusM   Int      @map("radius_m")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  company     Company     @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  timeEntries TimeEntry[]
+  checkIns    CheckIn[]
+
+  @@unique([companyId, id])
+  @@index([companyId, active])
+  @@map("work_sites")
+}
+
+/// Registro de llegada a un lugar: hora y ubicacion sin marcar entrada. No cuenta horas.
+/// Solo se crea; el admin lo puede anular sin borrarlo
+model CheckIn {
+  id          String    @id @default(uuid(7)) @db.Uuid
+  companyId   String    @map("company_id") @db.Uuid
+  employeeId  String    @map("employee_id") @db.Uuid
+  checkedInAt DateTime  @map("checked_in_at") @db.Timestamptz(3)
+  timezone    String    @db.VarChar(64)
+  workDate    DateTime  @map("work_date") @db.Date
+  latitude    Float
+  longitude   Float
+  accuracyM   Float     @map("accuracy_m")
+  /// Resultado de la zona al registrar: inside u outside, la zona mas cercana y a cuantos metros
+  zone        String?   @db.VarChar(10)
+  siteId      String?   @map("site_id") @db.Uuid
+  distanceM   Int?      @map("distance_m")
+  note        String?   @db.VarChar(200)
+  /// Anulacion: no se borra, deja de verse. Los tres campos van juntos
+  voidedAt    DateTime? @map("voided_at") @db.Timestamptz(3)
+  voidedById  String?   @map("voided_by_id") @db.Uuid
+  voidReason  String?   @map("void_reason") @db.VarChar(500)
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  company  Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  employee Employee  @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Restrict)
+  site     WorkSite? @relation(fields: [companyId, siteId], references: [companyId, id], onDelete: Restrict)
+  /// Sin empresa en la llave: quien anula puede ser un admin multiempresa, que no tiene empresa propia
+  voidedBy User?     @relation("CheckInVoidedBy", fields: [voidedById], references: [id], onDelete: Restrict)
+
+  @@unique([companyId, id])
+  @@index([companyId, checkedInAt(sort: Desc)])
+  @@index([employeeId, checkedInAt(sort: Desc)])
+  @@index([employeeId, workDate])
+  @@map("check_ins")
+}
+
 /// Periodo de pago cerrado: sus horas quedan congeladas y no se reabre
 model PayPeriodClosure {
   id              String   @id @default(uuid(7)) @db.Uuid
@@ -254,12 +343,53 @@ model PayPeriodClosure {
   totalCentihours BigInt   @map("total_centihours")
   closedById      String   @map("closed_by_id") @db.Uuid
   closedAt        DateTime @default(now()) @map("closed_at") @db.Timestamptz(3)
+  /// Moneda de los pagos congelados; null en los cierres anteriores a los sueldos
+  currency        String?  @db.Char(3)
 
-  company  Company @relation(fields: [companyId], references: [id], onDelete: Restrict)
-  closedBy User    @relation(fields: [companyId, closedById], references: [companyId, id], onDelete: Restrict)
+  company  Company               @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  closedBy User                  @relation(fields: [closedById], references: [id], onDelete: Restrict)
+  pays     PayPeriodClosurePay[]
 
   @@unique([companyId, periodStart])
+  @@unique([companyId, id])
   @@map("pay_period_closures")
+}
+
+/// Historial de sueldo: cada fila rige desde su fecha hasta la siguiente. Solo uno por dia
+model EmployeePayRate {
+  id            String   @id @default(uuid(7)) @db.Uuid
+  companyId     String   @map("company_id") @db.Uuid
+  employeeId    String   @map("employee_id") @db.Uuid
+  /// hourly: amountCents es por hora; salary: es el sueldo fijo de cada periodo de 14 dias
+  kind          String   @db.VarChar(10)
+  amountCents   BigInt   @map("amount_cents")
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  changedById   String   @map("changed_by_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt     DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  employee  Employee @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Restrict)
+  changedBy User     @relation("PayRateChangedBy", fields: [changedById], references: [id], onDelete: Restrict)
+
+  @@unique([employeeId, effectiveFrom])
+  @@index([companyId])
+  @@map("employee_pay_rates")
+}
+
+/// Pago de cada empleado congelado al cerrar el periodo
+model PayPeriodClosurePay {
+  closureId   String @map("closure_id") @db.Uuid
+  companyId   String @map("company_id") @db.Uuid
+  employeeId  String @map("employee_id") @db.Uuid
+  amountCents BigInt @map("amount_cents")
+
+  company  Company          @relation(fields: [companyId], references: [id], onDelete: Restrict)
+  closure  PayPeriodClosure @relation(fields: [companyId, closureId], references: [companyId, id], onDelete: Restrict)
+  employee Employee         @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Restrict)
+
+  @@id([closureId, employeeId])
+  @@map("pay_period_closure_pays")
 }
 
 model TimeEntryCorrection {
@@ -276,7 +406,7 @@ model TimeEntryCorrection {
 
   company     Company   @relation(fields: [companyId], references: [id], onDelete: Restrict)
   timeEntry   TimeEntry @relation(fields: [companyId, timeEntryId], references: [companyId, id], onDelete: Restrict)
-  correctedBy User      @relation(fields: [companyId, correctedById], references: [companyId, id], onDelete: Restrict)
+  correctedBy User      @relation(fields: [correctedById], references: [id], onDelete: Restrict)
 
   @@index([timeEntryId, createdAt(sort: Desc)])
   @@index([companyId, createdAt(sort: Desc)])
@@ -314,4 +444,21 @@ model DailyReportRevision {
 
   @@index([reportId, savedAt(sort: Desc)])
   @@map("daily_report_revisions")
+}
+
+/// Bajas del empleado: dias en que no cobra sueldo fijo. to_day null mientras sigue inactivo
+model EmployeeInactiveSpan {
+  companyId  String    @map("company_id") @db.Uuid
+  employeeId String    @map("employee_id") @db.Uuid
+  fromDay    DateTime  @map("from_day") @db.Date
+  toDay      DateTime? @map("to_day") @db.Date
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  employee Employee @relation(fields: [companyId, employeeId], references: [companyId, id], onDelete: Restrict)
+
+  @@id([employeeId, fromDay])
+  @@unique([employeeId], map: "employee_inactive_spans_one_open", where: raw("to_day IS NULL"))
+  @@index([companyId])
+  @@map("employee_inactive_spans")
 }

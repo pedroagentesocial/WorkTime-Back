@@ -12,6 +12,7 @@ import type {
   RosterPage,
 } from '../application/ports/employee-directory.js';
 import type { TimesheetEmployee } from '../domain/company-timesheet.js';
+import type { ClockZone } from '../domain/work-zone.js';
 
 interface Deps {
   db: PrismaDb;
@@ -26,7 +27,19 @@ const ROSTER_SELECT = {
   user: { select: { firstName: true, lastName: true } },
   timeEntries: {
     where: { clockOutAt: null, voidedAt: null },
-    select: { id: true, clockInAt: true, workDate: true, dailyLimitWaived: true },
+    select: {
+      id: true,
+      clockInAt: true,
+      workDate: true,
+      dailyLimitWaived: true,
+      clockInLatitude: true,
+      clockInLongitude: true,
+      clockInAccuracyM: true,
+      clockInZone: true,
+      clockInSiteId: true,
+      clockInDistanceM: true,
+      clockInSite: { select: { name: true } },
+    },
     take: 1,
   },
 } satisfies Prisma.EmployeeSelect;
@@ -36,6 +49,27 @@ const ROSTER_ORDER = [
   { user: { firstName: 'asc' } },
   { id: 'asc' },
 ] satisfies Prisma.EmployeeOrderByWithRelationInput[];
+
+function zoneOf(row: {
+  clockInZone: string | null;
+  clockInSiteId: string | null;
+  clockInDistanceM: number | null;
+  clockInSite: { name: string } | null;
+}): ClockZone | null {
+  if (
+    (row.clockInZone !== 'inside' && row.clockInZone !== 'outside') ||
+    row.clockInSiteId === null ||
+    row.clockInDistanceM === null
+  ) {
+    return null;
+  }
+  return {
+    status: row.clockInZone,
+    siteId: row.clockInSiteId,
+    siteName: row.clockInSite?.name ?? '',
+    distanceMeters: row.clockInDistanceM,
+  };
+}
 
 function toRosterEmployee(row: Prisma.EmployeeGetPayload<{ select: typeof ROSTER_SELECT }>) {
   const open = row.timeEntries[0];
@@ -52,6 +86,15 @@ function toRosterEmployee(row: Prisma.EmployeeGetPayload<{ select: typeof ROSTER
           clockInAt: open.clockInAt,
           workDate: open.workDate.toISOString().slice(0, 10),
           dailyLimitWaived: open.dailyLimitWaived,
+          clockInLocation:
+            open.clockInLatitude !== null && open.clockInLongitude !== null
+              ? {
+                  latitude: open.clockInLatitude,
+                  longitude: open.clockInLongitude,
+                  accuracyMeters: open.clockInAccuracyM ?? 0,
+                }
+              : null,
+          clockInZone: zoneOf(open),
         }
       : null,
   };
@@ -75,6 +118,8 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
         companyId,
         OR: [
           { user: { status: 'active' } },
+          // Dado de baja durante o despues del periodo: aunque no marco, puede tener sueldo fijo
+          { inactiveSpans: { some: { fromDay: { gt: new Date(`${range.from}T00:00:00.000Z`) } } } },
           {
             timeEntries: {
               some: {
@@ -204,6 +249,9 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
         companyId: true,
         timezone: true,
         dailyLimitMinutes: true,
+        allowCheckIns: true,
+        allowSelfEdit: true,
+        selfEditUntil: true,
         user: { select: { status: true } },
         company: {
           select: {
@@ -211,6 +259,9 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
             dailyLimitMinutes: true,
             requireDailyReport: true,
             dailyReportRequiredSince: true,
+            enforceWorkSites: true,
+            allowCheckIns: true,
+            selfEditDays: true,
           },
         },
       },
@@ -225,6 +276,13 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
       active: row.user.status === 'active',
       requireDailyReport: row.company.requireDailyReport,
       dailyReportRequiredSince: row.company.dailyReportRequiredSince.toISOString().slice(0, 10),
+      enforceWorkSites: row.company.enforceWorkSites,
+      allowCheckIns: row.allowCheckIns ?? row.company.allowCheckIns,
+      selfEdit: {
+        allowed: row.allowSelfEdit,
+        until: row.selfEditUntil ? row.selfEditUntil.toISOString().slice(0, 10) : null,
+        days: row.company.selfEditDays,
+      },
     };
   }
 

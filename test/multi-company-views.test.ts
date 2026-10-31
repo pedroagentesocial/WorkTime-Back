@@ -458,3 +458,53 @@ describe('Acceso a las vistas consolidadas', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('GET /portfolio/payroll', () => {
+  it('trae el pago de cada fila en la moneda de su empresa y un total por moneda', async () => {
+    const { app, alfa, beta, foreign, ana, beto, laura, auth } = await setup();
+    await prisma.company.update({ where: { id: beta.id }, data: { currency: 'MXN' } });
+    const rate = (companyId: string, employeeId: string, kind: string, amountCents: bigint) =>
+      prisma.employeePayRate.create({
+        data: {
+          companyId,
+          employeeId,
+          kind,
+          amountCents,
+          effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+          changedById: laura.id,
+        },
+      });
+    await rate(alfa.id, ana.employee.id, 'hourly', 1000n);
+    await rate(beta.id, beto.employee.id, 'salary', 140_000n);
+
+    const res = await get(app, auth, `/portfolio/payroll?date=${DAY_A}`);
+    expect(res.status).toBe(200);
+    expect(res.body.meta.payTotals).toEqual([
+      { currency: 'MXN', totalCents: 140_000, hourlyCents: 0, salaryCents: 140_000 },
+      { currency: 'USD', totalCents: 8500, hourlyCents: 8500, salaryCents: 0 },
+    ]);
+    expect(res.body.meta.missingPay).toEqual([]);
+    const rowOf = (id: string) =>
+      (res.body.data as { employee: { id: string } }[]).find((row) => row.employee.id === id);
+    expect(rowOf(ana.employee.id)).toMatchObject({
+      currency: 'USD',
+      pay: { amountCents: 8500 },
+    });
+    expect(rowOf(beto.employee.id)).toMatchObject({
+      currency: 'MXN',
+      pay: { amountCents: 140_000, salaryDays: 14 },
+    });
+    expect(JSON.stringify(res.body)).not.toContain('Ajeno');
+
+    const csv = await get(app, auth, `/portfolio/payroll/export?date=${DAY_A}`);
+    const lines = csvRows(csv.text);
+    expect(lines[0]).toBe(
+      'Empresa,Código de empresa,Código,Empleado,Estado,Moneda,Tipo,Sueldo,Horas,Días con sueldo fijo,Pago',
+    );
+    expect(lines.at(-2)).toBe(',,,Total MXN,,MXN,,,,,1400.00');
+    expect(lines.at(-1)).toBe(',,,Total USD,,USD,,,,,85.00');
+
+    const other = await get(app, auth, `/portfolio/payroll?companyId=${foreign.id}`);
+    expect(other.status).toBe(404);
+  });
+});

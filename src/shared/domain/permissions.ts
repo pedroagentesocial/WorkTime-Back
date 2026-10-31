@@ -21,6 +21,7 @@ export const Permission = {
   TIME_ENTRIES_CORRECT: 'time_entries.correct',
   ATTENDANCE_CLOCK_EMPLOYEES: 'attendance.clock_employees',
   PERIODS_MANAGE: 'periods.manage',
+  PAY_MANAGE: 'pay.manage',
 
   ATTENDANCE_CLOCK_OWN: 'attendance.clock_own',
   ATTENDANCE_READ_OWN: 'attendance.read_own',
@@ -36,6 +37,7 @@ const COMPANY_ADMIN_PERMISSIONS: readonly Permission[] = [
   Permission.TIME_ENTRIES_CORRECT,
   Permission.ATTENDANCE_CLOCK_EMPLOYEES,
   Permission.PERIODS_MANAGE,
+  Permission.PAY_MANAGE,
 ];
 
 const ROLE_PERMISSIONS: Readonly<Record<Role, ReadonlySet<Permission>>> = {

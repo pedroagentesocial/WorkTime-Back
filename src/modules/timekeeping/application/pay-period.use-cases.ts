@@ -17,9 +17,11 @@ import {
   previousPayPeriodStart,
   type PayPeriod,
 } from '../domain/pay-period.js';
+import { periodPay } from '../domain/pay.js';
 import { centihoursToHours } from '../domain/work-hours.js';
 import type { DailyReportRepository } from './ports/daily-report.repository.js';
 import type { EmployeeDirectory } from './ports/employee-directory.js';
+import type { PayRateReader } from './ports/pay-rate.reader.js';
 import type {
   PeriodClosureRepository,
   PeriodClosureView,
@@ -34,6 +36,7 @@ interface Deps {
   timeEntryRepository: TimeEntryRepository;
   dailyReportRepository: DailyReportRepository;
   employeeDirectory: EmployeeDirectory;
+  payRateReader: PayRateReader;
   transactions: TransactionRunner;
   idGenerator: IdGenerator;
   securityEvents: SecurityEventRecorder;
@@ -150,9 +153,18 @@ export class ClosePayPeriodUseCase implements UseCase<ClosePayPeriodInput, Perio
         );
       }
 
-      const total = (
-        await entries.periodTotals(companyId, { from: period.start, to: period.end })
-      ).reduce((sum, row) => sum + row.centihours, 0);
+      const range = { from: period.start, to: period.end };
+      const totals = await entries.periodTotals(companyId, range);
+      const total = totals.reduce((sum, row) => sum + row.centihours, 0);
+
+      // Congela lo que se paga a cada empleado: despues no cambia aunque cambien sus datos
+      const employees = await this.deps.employeeDirectory.listForTimesheet(
+        companyId,
+        range,
+        undefined,
+      );
+      const setup = await this.deps.payRateReader.setupOf(companyId, period.end);
+      const pay = setup && periodPay(setup, period, employees, totals);
       await closures.insert({
         id: this.deps.idGenerator.generate(),
         companyId,
@@ -160,6 +172,10 @@ export class ClosePayPeriodUseCase implements UseCase<ClosePayPeriodInput, Perio
         periodEnd: period.end,
         totalCentihours: total,
         closedById: actor.userId,
+        currency: pay?.currency ?? null,
+        pays: [...(pay?.byEmployee ?? [])].flatMap(([employeeId, { amountCents }]) =>
+          amountCents === null ? [] : [{ employeeId, amountCents }],
+        ),
       });
       await this.deps.securityEvents.recordOrThrow({
         type: SecurityEventType.PAY_PERIOD_CLOSED,
@@ -170,6 +186,7 @@ export class ClosePayPeriodUseCase implements UseCase<ClosePayPeriodInput, Perio
           periodStart: period.start,
           periodEnd: period.end,
           totalHours: centihoursToHours(total),
+          ...(pay && { currency: pay.currency, totalPayCents: pay.totalCents }),
         },
       });
     });

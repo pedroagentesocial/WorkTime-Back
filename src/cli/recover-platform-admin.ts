@@ -1,31 +1,34 @@
-// Rescate del admin global: contrasena temporal nueva, desbloqueo y cierre de todas sus sesiones
-// Desarrollo: npm run admin:recover · Docker: docker compose run --rm api node dist/cli/recover-platform-admin.js
+// Recupera el acceso del admin global desde la terminal. No hay pantalla ni ruta para esto a proposito:
+// solo puede usarlo quien ya entra al servidor y tiene el .env
 import { EnvValidationError, loadEnv } from '#config/env.js';
 import { modules } from '#modules/index.js';
-import { AppError } from '#shared/domain/errors.js';
 import { bootstrap } from '../bootstrap.js';
 
 async function recover(): Promise<void> {
-  const { container } = bootstrap(loadEnv(), modules);
+  const env = loadEnv();
+  const { container } = bootstrap(env, modules);
+
   try {
     const result = await container.cradle.recoverPlatformAdmin.execute();
-    console.log(`✔ Admin global restablecido: ${maskEmail(result.admin.email)}`);
+    console.log('');
+    console.log('✔ Acceso del admin global recuperado');
+    console.log(`  Correo:              ${result.admin.email}`);
     console.log(`  Contraseña temporal: ${result.temporaryPassword}`);
-    console.log(`  Vence: ${result.temporaryPasswordExpiresAt.toISOString()}`);
-    console.log('  Se muestra una sola vez. Deberá cambiarla al iniciar sesión.');
-    console.log('  Sus sesiones abiertas se cerraron y el bloqueo por intentos se quitó.');
+    console.log(`  Vence:               ${result.temporaryPasswordExpiresAt.toISOString()} (UTC)`);
+    console.log('');
+    console.log('  Cópiala ahora: no se vuelve a mostrar ni se guarda en ningún lado.');
+    console.log(
+      '  Al entrar deberá cambiarla. Se cerraron todas sus sesiones y se quitó el bloqueo.',
+    );
+    console.log('');
   } finally {
     await container.dispose();
   }
 }
 
-function maskEmail(email: string): string {
-  const [user = '', domain = ''] = email.split('@');
-  return `${user.slice(0, 2)}***@${domain}`;
-}
-
 recover().catch((error: unknown) => {
-  const known = error instanceof EnvValidationError || error instanceof AppError;
-  console.error(known ? `✖ ${error.message}` : error);
+  const message =
+    error instanceof EnvValidationError || error instanceof Error ? error.message : String(error);
+  console.error(`\n✖ No se pudo recuperar el acceso: ${message}\n`);
   process.exit(1);
 });
