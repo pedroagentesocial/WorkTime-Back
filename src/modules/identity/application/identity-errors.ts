@@ -35,6 +35,12 @@ export const IdentityErrors = {
   sessionRevoked: () =>
     new UnauthorizedError('SESSION_REVOKED', 'La sesión ya no es válida; inicia sesión de nuevo'),
 
+  invalidResetToken: () =>
+    new ValidationError(
+      'INVALID_RESET_TOKEN',
+      'El enlace para restablecer la contraseña no es válido o ya venció; pide uno nuevo',
+    ),
+
   invalidCurrentPassword: () =>
     new ValidationError('INVALID_CURRENT_PASSWORD', 'La contraseña actual no es correcta'),
 

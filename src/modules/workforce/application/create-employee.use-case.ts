@@ -7,7 +7,11 @@ import {
   type SecurityEventRecorder,
 } from '#shared/application/ports/security-event-recorder.js';
 import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
-import type { TemporaryPasswordIssuer } from '#shared/application/temporary-password-issuer.js';
+import type {
+  AccessDelivery,
+  AccessResult,
+  AccountAccess,
+} from '#shared/application/account-access.js';
 import type { UseCase } from '#shared/application/use-case.js';
 import { localDateOf, resolveTimezone } from '#shared/domain/timezone.js';
 import { EmployeeRules } from '../domain/employee-rules.js';
@@ -23,18 +27,18 @@ export interface CreateEmployeeInput {
   readonly phone?: string | null | undefined;
   readonly hiredAt?: string | null | undefined;
   readonly timezone?: string | null | undefined;
+  readonly delivery?: AccessDelivery | undefined;
 }
 
 export interface CreateEmployeeOutput {
   readonly employee: EmployeeView;
-  readonly temporaryPassword: string;
-  readonly temporaryPasswordExpiresAt: Date;
+  readonly access: AccessResult;
 }
 
 interface Deps {
   employeeRepository: EmployeeRepository;
   transactions: TransactionRunner;
-  temporaryPasswords: TemporaryPasswordIssuer;
+  accountAccess: AccountAccess;
   idGenerator: IdGenerator;
   securityEvents: SecurityEventRecorder;
   clock: Clock;
@@ -52,7 +56,7 @@ export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, Creat
     const timezone = input.timezone ?? null;
     EmployeeRules.assertTimezone(timezone);
 
-    const temporary = await this.deps.temporaryPasswords.issue();
+    const access = await this.deps.accountAccess.prepare(email, input.delivery);
     const employeeId = idGenerator.generate();
     const userId = idGenerator.generate();
 
@@ -79,9 +83,10 @@ export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, Creat
         phone,
         hiredAt,
         timezone,
-        passwordHash: temporary.passwordHash,
-        temporaryPasswordExpiresAt: temporary.expiresAt,
+        passwordHash: access.passwordHash,
+        temporaryPasswordExpiresAt: access.expiresAt,
       });
+      await this.deps.accountAccess.saveLink(userId, access);
     });
 
     await this.deps.securityEvents.record({
@@ -89,15 +94,18 @@ export class CreateEmployeeUseCase implements UseCase<CreateEmployeeInput, Creat
       userId: input.actor.userId,
       companyId,
       client: input.client,
-      metadata: { employeeId, targetUserId: userId },
+      metadata: { employeeId, targetUserId: userId, delivery: access.delivery },
     });
 
     const employee = await employees.findById(companyId, employeeId);
     if (!employee) throw WorkforceErrors.employeeNotFound();
     return {
       employee,
-      temporaryPassword: temporary.password,
-      temporaryPasswordExpiresAt: temporary.expiresAt,
+      access: await this.deps.accountAccess.deliver(
+        { email, firstName: employee.firstName },
+        access,
+        'welcome',
+      ),
     };
   }
 }

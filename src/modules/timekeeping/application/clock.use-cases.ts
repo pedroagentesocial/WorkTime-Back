@@ -134,7 +134,7 @@ export class ClockOutUseCase implements UseCase<ClockOutInput, TimeEntry> {
     await this.deps.transactions.run(async () => {
       if (report) await saveDailyReport(this.deps, profile, open.workDate, report, now);
       open.close(now);
-      if (!(await entries.closeIfOpen(open.companyId, open.id, now, 'employee'))) {
+      if (!(await entries.closeIfOpen(open.companyId, open.id, now, 'employee', open.clockInAt))) {
         throw TimekeepingErrors.notClockedIn();
       }
     });

@@ -8,7 +8,14 @@ import {
   paginated,
   type AnyRoute,
 } from '#shared/http/route.js';
-import { dataResponse, idParams, pageResponse, uuidSchema } from '#shared/http/schemas.js';
+import {
+  dataResponse,
+  idParams,
+  pageResponse,
+  resetAccessBody,
+  toAccessDto,
+  uuidSchema,
+} from '#shared/http/schemas.js';
 import type { ChangeEmployeeStatusUseCase } from '../application/change-employee-status.use-case.js';
 import type {
   GetCompanySettingsUseCase,
@@ -210,8 +217,7 @@ export function workforceRoutes(deps: Deps): AnyRoute[] {
         const result = await deps.createEmployee.execute({ actor, client: request, ...body });
         return created({
           employee: toEmployeeDto(result.employee),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),
@@ -458,7 +464,7 @@ export function workforceRoutes(deps: Deps): AnyRoute[] {
         'desbloquea su cuenta.',
       tags: EMPLOYEE_TAGS,
       auth: Permission.EMPLOYEES_MANAGE,
-      request: { params: idParams },
+      request: { params: idParams, body: resetAccessBody },
       responses: {
         200: {
           description: 'Contraseña restablecida',
@@ -466,16 +472,16 @@ export function workforceRoutes(deps: Deps): AnyRoute[] {
         },
         404: EMPLOYEE_NOT_FOUND,
       },
-      handler: async ({ actor, params, request }) => {
+      handler: async ({ actor, params, body, request }) => {
         const result = await deps.resetEmployeePassword.execute({
           actor,
           client: request,
           employeeId: params.id,
+          delivery: body?.delivery,
         });
         return ok({
           employee: toEmployeeDto(result.employee),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),

@@ -37,6 +37,6 @@ export async function closeIfOverLimit(
   if (now < closeAt) return false;
 
   entry.close(closeAt, 'daily_limit');
-  await entries.closeIfOpen(entry.companyId, entry.id, closeAt, 'daily_limit');
+  await entries.closeIfOpen(entry.companyId, entry.id, closeAt, 'daily_limit', entry.clockInAt);
   return true;
 }

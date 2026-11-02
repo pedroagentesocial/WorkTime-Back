@@ -31,7 +31,8 @@ export class CloseEntryOnDeactivationUseCase implements UseCase<EmployeeDeactiva
       if (open?.companyId !== input.companyId) return;
 
       const closeAt = input.at < open.clockInAt ? open.clockInAt : input.at;
-      if (!(await entries.closeIfOpen(input.companyId, open.id, closeAt, 'admin'))) return;
+      if (!(await entries.closeIfOpen(input.companyId, open.id, closeAt, 'admin', open.clockInAt)))
+        return;
 
       await entries.addCorrection({
         id: this.deps.idGenerator.generate(),

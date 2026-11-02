@@ -224,6 +224,7 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
   async deleteAccount(companyId: string, employeeId: string): Promise<void> {
     const userId = await this.userIdOf(companyId, employeeId);
     await this.db.client.refreshToken.deleteMany({ where: { userId } });
+    await this.db.client.passwordResetToken.deleteMany({ where: { userId } });
     await this.db.client.securityEvent.deleteMany({ where: { userId } });
     // Su historial de sueldo sin pagos cerrados no es historia: se va con la cuenta
     await this.db.client.employeePayRate.deleteMany({ where: { employeeId, companyId } });

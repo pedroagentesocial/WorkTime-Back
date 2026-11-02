@@ -30,12 +30,16 @@ function build(failures: number) {
   let seed = 0;
   const useCase = new CreateCompanyUseCase({
     companyRepository: repository,
-    temporaryPasswords: {
-      issue: async () => ({
-        password: 'temporal',
+    accountAccess: {
+      prepare: async () => ({
+        delivery: 'temporary_password',
         passwordHash: 'hash',
         expiresAt: new Date('2026-10-10T00:00:00Z'),
+        temporaryPassword: 'temporal',
+        token: null,
       }),
+      saveLink: async () => {},
+      deliver: async () => ({}),
     } as never,
     idGenerator: { generate: () => 'id' },
     secureRandom: { int: () => (seed += 1) % 20 } as never,

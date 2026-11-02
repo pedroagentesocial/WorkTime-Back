@@ -11,6 +11,9 @@ import type { Env } from '#config/env.js';
 import { SECURITY } from '#config/security.js';
 import type { Authenticator } from '#shared/application/ports/authenticator.js';
 import type { Clock } from '#shared/application/ports/clock.js';
+import type { EmailSender } from '#shared/application/ports/email-sender.js';
+import type { AccessLinkStore } from '#shared/application/ports/access-link-store.js';
+import { AccountAccess, type AccountAccessSettings } from '#shared/application/account-access.js';
 import type { EventBus } from '#shared/application/ports/event-bus.js';
 import type { IdGenerator } from '#shared/application/ports/id-generator.js';
 import type { PasswordHasher } from '#shared/application/ports/password-hasher.js';
@@ -30,9 +33,15 @@ import {
   createPrismaClient,
   type PrismaClient,
 } from '#shared/infrastructure/prisma/prisma-client.js';
+import { PrismaAccessLinkStore } from '#shared/infrastructure/prisma/prisma-access-link-store.js';
 import { PrismaDb } from '#shared/infrastructure/prisma/prisma-db.js';
 import { PrismaSecurityEventRecorder } from '#shared/infrastructure/prisma/prisma-security-event-recorder.js';
 import { NodeSecureRandom } from '#shared/infrastructure/node-secure-random.js';
+import {
+  DisabledEmailSender,
+  GuardedEmailSender,
+  ResendEmailSender,
+} from '#shared/infrastructure/resend-email-sender.js';
 import { SystemClock } from '#shared/infrastructure/system-clock.js';
 import { UuidV7IdGenerator } from '#shared/infrastructure/uuid-v7-id-generator.js';
 
@@ -53,6 +62,10 @@ export interface Cradle {
   temporaryPasswordSettings: TemporaryPasswordSettings;
   temporaryPasswords: TemporaryPasswordIssuer;
   authenticator: Authenticator;
+  emailSender: EmailSender;
+  accessLinks: AccessLinkStore;
+  accountAccessSettings: AccountAccessSettings;
+  accountAccess: AccountAccess;
 }
 
 export type AppContainer = AwilixContainer<Cradle>;
@@ -81,6 +94,18 @@ export function createAppContainer(env: Env, logger: PinoLogger): AppContainer {
       ttlHours: SECURITY.password.temporaryTtlHours,
     }),
     temporaryPasswords: asClass(TemporaryPasswordIssuer).singleton(),
+    accessLinks: asClass(PrismaAccessLinkStore).singleton(),
+    accountAccessSettings: asValue({ appUrl: env.email?.appUrl ?? null }),
+    accountAccess: asClass(AccountAccess).singleton(),
+    emailSender: asFunction(
+      (): EmailSender =>
+        new GuardedEmailSender(
+          env.email
+            ? new ResendEmailSender(env.email.resendApiKey, env.email.from)
+            : new DisabledEmailSender(logger),
+          logger,
+        ),
+    ).singleton(),
   });
 
   return container;

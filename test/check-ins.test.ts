@@ -304,7 +304,7 @@ describe('POST /company/check-ins/{id}/void', () => {
     const { app, company, asAna } = await setup();
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await login(app, laura.email, DEFAULT_PASSWORD);
-    const asLaura = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    const asLaura = bearer((await switchCompany(app, session, company.id)).accessToken);
     const created = (await checkIn(app, asAna).expect(201)).body.data;
     const res = await voidCheckIn(app, asLaura, created.id).expect(200);
     expect(res.body.data.voidedBy).toMatchObject({ id: laura.id });

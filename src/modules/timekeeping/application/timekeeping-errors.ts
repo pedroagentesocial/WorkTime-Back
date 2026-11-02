@@ -131,6 +131,11 @@ export const TimekeepingErrors = {
       'SELF_EDIT_OVER_LIMIT',
       'Con este cambio pasarías tu límite diario: pídele a tu administrador que lo corrija',
     ),
+  selfEditTooLong: () =>
+    new ConflictError(
+      'SELF_EDIT_TOO_LONG',
+      'Un marcaje que corriges tú no puede durar más de 24 horas: pídele a tu administrador que lo corrija',
+    ),
   checkInNotFound: () => new NotFoundError('CHECK_IN_NOT_FOUND', 'El check-in no existe'),
   checkInVoided: () => new ConflictError('CHECK_IN_VOIDED', 'El check-in ya está anulado'),
   timeEntryVoided: () =>

@@ -6,7 +6,11 @@ import {
   type SecurityEventRecorder,
 } from '#shared/application/ports/security-event-recorder.js';
 import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
-import type { TemporaryPasswordIssuer } from '#shared/application/temporary-password-issuer.js';
+import type {
+  AccessDelivery,
+  AccessResult,
+  AccountAccess,
+} from '#shared/application/account-access.js';
 import type { UseCase } from '#shared/application/use-case.js';
 import { MultiAdminRules } from '../domain/multi-admin-rules.js';
 import { PlatformErrors } from './platform-errors.js';
@@ -21,18 +25,18 @@ export interface CreateMultiAdminInput {
   readonly lastName: string;
   readonly maxCompanies: number;
   readonly maxEmployeesPerCompany: number;
+  readonly delivery?: AccessDelivery | undefined;
 }
 
 export interface CreateMultiAdminOutput {
   readonly multiAdmin: MultiAdminView;
-  readonly temporaryPassword: string;
-  readonly temporaryPasswordExpiresAt: Date;
+  readonly access: AccessResult;
 }
 
 interface Deps {
   multiAdminRepository: MultiAdminRepository;
   companyRepository: CompanyRepository;
-  temporaryPasswords: TemporaryPasswordIssuer;
+  accountAccess: AccountAccess;
   transactions: TransactionRunner;
   idGenerator: IdGenerator;
   securityEvents: SecurityEventRecorder;
@@ -53,7 +57,7 @@ export class CreateMultiAdminUseCase implements UseCase<
     const email = input.email.trim().toLowerCase();
     if (await this.deps.companyRepository.emailExists(email)) throw PlatformErrors.emailTaken();
 
-    const temporary = await this.deps.temporaryPasswords.issue();
+    const access = await this.deps.accountAccess.prepare(email, input.delivery);
     const id = this.deps.idGenerator.generate();
 
     await this.deps.transactions.run(async () => {
@@ -62,11 +66,12 @@ export class CreateMultiAdminUseCase implements UseCase<
         email,
         firstName: input.firstName.trim(),
         lastName: input.lastName.trim(),
-        passwordHash: temporary.passwordHash,
-        temporaryPasswordExpiresAt: temporary.expiresAt,
+        passwordHash: access.passwordHash,
+        temporaryPasswordExpiresAt: access.expiresAt,
         maxCompanies: input.maxCompanies,
         maxEmployeesPerCompany: input.maxEmployeesPerCompany,
       });
+      await this.deps.accountAccess.saveLink(id, access);
       await this.deps.securityEvents.recordOrThrow({
         type: SecurityEventType.MULTI_ADMIN_CREATED,
         userId: input.actor.userId,
@@ -75,6 +80,7 @@ export class CreateMultiAdminUseCase implements UseCase<
           targetUserId: id,
           maxCompanies: input.maxCompanies,
           maxEmployeesPerCompany: input.maxEmployeesPerCompany,
+          delivery: access.delivery,
         },
       });
     });
@@ -83,8 +89,11 @@ export class CreateMultiAdminUseCase implements UseCase<
     if (!multiAdmin) throw PlatformErrors.multiAdminNotFound();
     return {
       multiAdmin,
-      temporaryPassword: temporary.password,
-      temporaryPasswordExpiresAt: temporary.expiresAt,
+      access: await this.deps.accountAccess.deliver(
+        { email, firstName: multiAdmin.firstName },
+        access,
+        'welcome',
+      ),
     };
   }
 }

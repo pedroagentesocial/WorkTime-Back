@@ -1,4 +1,4 @@
-import { emailSchema, personNameSchema } from '#shared/http/schemas.js';
+import { accessDeliveryInput, emailSchema, personNameSchema } from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
 import { COMPANY_LIMITS } from '#shared/domain/company-rules.js';
 import type { MyCompanies } from '../application/list-my-companies.use-case.js';
@@ -22,7 +22,10 @@ export const createOwnCompanyBody = z
         lastName: personNameSchema.openapi({ example: 'Pérez' }),
       })
       .strict()
-      .openapi({ description: 'El admin de la nueva empresa. Recibe una contraseña temporal.' }),
+      .openapi({
+        description: 'El admin de la nueva empresa. Recibe un correo para crear su contraseña.',
+      }),
+    delivery: accessDeliveryInput,
   })
   .strict()
   .openapi('CreateOwnCompanyRequest');

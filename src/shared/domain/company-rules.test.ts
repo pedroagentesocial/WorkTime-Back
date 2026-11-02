@@ -41,13 +41,4 @@ describe('CompanyRules', () => {
       CompanyRules.assertMaxEmployees(50);
     }).not.toThrow();
   });
-
-  it('no permite un límite menor a los empleados activos', () => {
-    expect(() => {
-      CompanyRules.assertLimitCoversActiveEmployees(5, 6);
-    }).toThrow(expect.objectContaining({ code: 'MAX_EMPLOYEES_BELOW_ACTIVE' }));
-    expect(() => {
-      CompanyRules.assertLimitCoversActiveEmployees(6, 6);
-    }).not.toThrow();
-  });
 });

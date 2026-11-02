@@ -1,4 +1,4 @@
-import { ConflictError, ValidationError } from '#shared/domain/errors.js';
+import { ValidationError } from '#shared/domain/errors.js';
 import { isValidTimezone } from '#shared/domain/timezone.js';
 
 export type CompanyStatus = 'active' | 'suspended';
@@ -46,16 +46,6 @@ export const CompanyRules = {
       throw new ValidationError(
         'INVALID_MAX_EMPLOYEES',
         `El límite de empleados debe ser un entero entre 1 y ${COMPANY_LIMITS.maxEmployeesUpperBound}`,
-      );
-    }
-  },
-
-  assertLimitCoversActiveEmployees(maxEmployees: number, activeEmployees: number): void {
-    if (maxEmployees < activeEmployees) {
-      throw new ConflictError(
-        'MAX_EMPLOYEES_BELOW_ACTIVE',
-        `La empresa tiene ${activeEmployees} empleados activos; el límite no puede ser menor`,
-        { activeEmployees },
       );
     }
   },

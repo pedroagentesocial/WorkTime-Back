@@ -19,6 +19,18 @@ import type { WorkSiteRepository } from './ports/work-site.repository.js';
 import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
 import { WorkforceErrors } from './workforce-errors.js';
 
+// Cambian lo que se paga o quien puede tocar sus horas: se guarda el valor anterior y el nuevo
+const PAY_FIELDS = ['currency', 'dailyLimitMinutes', 'selfEditDays'] as const;
+
+function payChangesOf(current: CompanySettingsView, changes: CompanySettingsPatch) {
+  return Object.fromEntries(
+    PAY_FIELDS.filter((field) => changes[field] !== undefined).map((field) => [
+      field,
+      { from: current[field], to: changes[field] },
+    ]),
+  );
+}
+
 interface Deps {
   companySettingsRepository: CompanySettingsRepository;
   securityEvents: SecurityEventRecorder;
@@ -94,13 +106,13 @@ export class UpdateCompanySettingsUseCase implements UseCase<
         if (!counts || counts.active === 0) throw WorkforceErrors.workSitesRequired();
       }
       await this.deps.companySettingsRepository.update(companyId, patched);
-    });
-    await this.deps.securityEvents.record({
-      type: SecurityEventType.COMPANY_SETTINGS_UPDATED,
-      userId: actor.userId,
-      companyId,
-      client,
-      metadata: { fields: Object.keys(changes) },
+      await this.deps.securityEvents.recordOrThrow({
+        type: SecurityEventType.COMPANY_SETTINGS_UPDATED,
+        userId: actor.userId,
+        companyId,
+        client,
+        metadata: { fields: Object.keys(changes), payChanges: payChangesOf(current, changes) },
+      });
     });
 
     const updated = await this.deps.companySettingsRepository.findById(companyId);

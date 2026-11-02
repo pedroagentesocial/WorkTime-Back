@@ -24,6 +24,9 @@ const EXPECTED_PUBLIC_ROUTES = [
   'POST /auth/login',
   'POST /auth/refresh',
   'POST /auth/logout',
+  // Recuperar la contrasena: quien la olvido no tiene sesion
+  'POST /auth/password-reset',
+  'POST /auth/password-reset/confirm',
 ].sort();
 
 const tokens: Partial<Record<Role, Record<string, string>>> = {};
@@ -54,7 +57,7 @@ beforeAll(async () => {
   // Con empresa activa, para que las rutas de empresa respondan como a un admin de empresa
   const multiSession = await login(app, multi.email, DEFAULT_PASSWORD);
   tokens[Role.MULTI_COMPANY_ADMIN] = bearer(
-    (await switchCompany(app, multiSession.accessToken, company.id)).accessToken,
+    (await switchCompany(app, multiSession, company.id)).accessToken,
   );
   tokens[Role.EMPLOYEE] = bearer((await login(app, employee.email, DEFAULT_PASSWORD)).accessToken);
 });

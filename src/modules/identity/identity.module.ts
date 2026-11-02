@@ -9,12 +9,19 @@ import { LogoutUseCase } from './application/logout.use-case.js';
 import { LogoutAllUseCase, UpdateProfileUseCase } from './application/profile.use-cases.js';
 import type { RefreshTokenRepository } from './application/ports/refresh-token.repository.js';
 import type { UserAccountRepository } from './application/ports/user-account.repository.js';
+import {
+  ConfirmPasswordResetUseCase,
+  RequestPasswordResetUseCase,
+  type PasswordResetSettings,
+} from './application/password-reset.use-cases.js';
+import type { PasswordResetRepository } from './application/ports/password-reset.repository.js';
 import { RefreshSessionUseCase } from './application/refresh-session.use-case.js';
 import { SessionIssuer, type SessionSettings } from './application/session-issuer.js';
 import { SwitchActiveCompanyUseCase } from './application/switch-active-company.use-case.js';
 import { TokenAuthenticator } from './application/token-authenticator.js';
 import { LoginLockoutPolicy } from './domain/login-lockout-policy.js';
 import { PasswordPolicy } from './domain/password-policy.js';
+import { PrismaPasswordResetRepository } from './infrastructure/prisma-password-reset.repository.js';
 import { PrismaRefreshTokenRepository } from './infrastructure/prisma-refresh-token.repository.js';
 import { PrismaUserAccountRepository } from './infrastructure/prisma-user-account.repository.js';
 import { authRoutes } from './presentation/auth.routes.js';
@@ -35,6 +42,10 @@ declare module '#shared/composition/container.js' {
     updateProfile: UpdateProfileUseCase;
     logoutAll: LogoutAllUseCase;
     switchActiveCompany: SwitchActiveCompanyUseCase;
+    passwordResetSettings: PasswordResetSettings;
+    passwordResetRepository: PasswordResetRepository;
+    requestPasswordReset: RequestPasswordResetUseCase;
+    confirmPasswordReset: ConfirmPasswordResetUseCase;
   }
 }
 
@@ -71,6 +82,15 @@ export const identityModule: AppModule = {
       updateProfile: asClass(UpdateProfileUseCase).singleton(),
       logoutAll: asClass(LogoutAllUseCase).singleton(),
       switchActiveCompany: asClass(SwitchActiveCompanyUseCase).singleton(),
+
+      passwordResetSettings: asFunction(({ env }: Cradle): PasswordResetSettings => ({
+        appUrl: env.email?.appUrl ?? null,
+        ttlMs: SECURITY.passwordReset.ttlMinutes * 60_000,
+        cooldownMs: SECURITY.passwordReset.resendCooldownSeconds * 1000,
+      })).singleton(),
+      passwordResetRepository: asClass(PrismaPasswordResetRepository).singleton(),
+      requestPasswordReset: asClass(RequestPasswordResetUseCase).singleton(),
+      confirmPasswordReset: asClass(ConfirmPasswordResetUseCase).singleton(),
 
       authenticator: asClass(TokenAuthenticator).singleton(),
     });

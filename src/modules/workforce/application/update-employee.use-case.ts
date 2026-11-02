@@ -4,6 +4,7 @@ import {
   SecurityEventType,
   type SecurityEventRecorder,
 } from '#shared/application/ports/security-event-recorder.js';
+import type { TransactionRunner } from '#shared/application/ports/transaction-runner.js';
 import type { UseCase } from '#shared/application/use-case.js';
 import { DailyLimit } from '#shared/domain/daily-limit.js';
 import { EmployeeRules } from '../domain/employee-rules.js';
@@ -24,7 +25,11 @@ export interface UpdateEmployeeInput {
 interface Deps {
   employeeRepository: EmployeeRepository;
   securityEvents: SecurityEventRecorder;
+  transactions: TransactionRunner;
 }
+
+// Cambian lo que se paga o quien puede tocar sus horas: se guarda el valor anterior y el nuevo
+const PAY_FIELDS = ['dailyLimitMinutes', 'allowSelfEdit', 'selfEditUntil'] as const;
 
 export class UpdateEmployeeUseCase implements UseCase<UpdateEmployeeInput, EmployeeView> {
   constructor(private readonly deps: Deps) {}
@@ -33,8 +38,8 @@ export class UpdateEmployeeUseCase implements UseCase<UpdateEmployeeInput, Emplo
     const { employeeRepository: employees } = this.deps;
     const companyId = companyIdOf(actor);
 
-    if (!(await employees.findById(companyId, employeeId)))
-      throw WorkforceErrors.employeeNotFound();
+    const current = await employees.findById(companyId, employeeId);
+    if (!current) throw WorkforceErrors.employeeNotFound();
 
     const changes: EmployeePatch = {
       ...(patch.firstName !== undefined && { firstName: patch.firstName.trim() }),
@@ -52,13 +57,21 @@ export class UpdateEmployeeUseCase implements UseCase<UpdateEmployeeInput, Emplo
     if (changes.timezone !== undefined) EmployeeRules.assertTimezone(changes.timezone);
     if (changes.dailyLimitMinutes !== undefined) DailyLimit.assertValid(changes.dailyLimitMinutes);
 
-    await employees.update(companyId, employeeId, changes);
-    await this.deps.securityEvents.record({
-      type: SecurityEventType.EMPLOYEE_UPDATED,
-      userId: actor.userId,
-      companyId,
-      client,
-      metadata: { employeeId, fields: Object.keys(changes) },
+    const payChanges = Object.fromEntries(
+      PAY_FIELDS.filter((field) => changes[field] !== undefined).map((field) => [
+        field,
+        { from: current[field], to: changes[field] },
+      ]),
+    );
+    await this.deps.transactions.run(async () => {
+      await employees.update(companyId, employeeId, changes);
+      await this.deps.securityEvents.recordOrThrow({
+        type: SecurityEventType.EMPLOYEE_UPDATED,
+        userId: actor.userId,
+        companyId,
+        client,
+        metadata: { employeeId, fields: Object.keys(changes), payChanges },
+      });
     });
 
     const updated = await employees.findById(companyId, employeeId);

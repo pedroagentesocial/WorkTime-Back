@@ -96,11 +96,13 @@ export interface TimeEntryRepository {
   // No devuelve registros anulados
   findById(companyId: string, id: string): Promise<TimeEntry | null>;
   insert(entry: TimeEntry): Promise<void>;
+  // Solo si la entrada sigue como se leyo: una correccion simultanea de la hora de entrada la deja abierta
   closeIfOpen(
     companyId: string,
     id: string,
     at: Date,
     closeSource: TimeEntryCloseSource,
+    expectedClockInAt: Date,
   ): Promise<boolean>;
   findOpenUpTo(companyId: string, workDate: string, limit: number): Promise<OpenEntryBlocker[]>;
   findOpenOfInactiveEmployees(

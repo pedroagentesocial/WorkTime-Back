@@ -1,4 +1,10 @@
-import { emailSchema, paginationQuery, personNameSchema } from '#shared/http/schemas.js';
+import {
+  accessDeliveryInput,
+  accessResultShape,
+  emailSchema,
+  paginationQuery,
+  personNameSchema,
+} from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
 import type { CompanyAdminSummary, CompanyView } from '../application/ports/company.repository.js';
 import { COMPANY_DEFAULTS, COMPANY_LIMITS } from '#shared/domain/company-rules.js';
@@ -40,6 +46,7 @@ export const createCompanyBody = z
         lastName: personNameSchema.openapi({ example: 'Pérez' }),
       })
       .strict(),
+    delivery: accessDeliveryInput,
   })
   .strict()
   .openapi('CreateCompanyRequest');
@@ -110,19 +117,14 @@ export const companySchema = z
 export const createCompanyResponse = z
   .object({
     company: companySchema,
-    temporaryPassword: z.string().openapi({
-      description:
-        'Contraseña temporal del admin. Se muestra UNA sola vez; entrégala de forma segura.',
-    }),
-    temporaryPasswordExpiresAt: z.iso.datetime(),
+    ...accessResultShape,
   })
   .openapi('CreateCompanyResponse');
 
 export const resetAdminPasswordResponse = z
   .object({
     admin: companyAdminSchema,
-    temporaryPassword: z.string().openapi({ description: 'Se muestra UNA sola vez.' }),
-    temporaryPasswordExpiresAt: z.iso.datetime(),
+    ...accessResultShape,
   })
   .openapi('ResetAdminPasswordResponse');
 

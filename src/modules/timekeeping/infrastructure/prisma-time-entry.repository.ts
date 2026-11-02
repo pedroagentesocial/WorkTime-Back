@@ -124,9 +124,10 @@ export class PrismaTimeEntryRepository implements TimeEntryRepository {
     id: string,
     at: Date,
     closeSource: TimeEntryCloseSource,
+    expectedClockInAt: Date,
   ): Promise<boolean> {
     const { count } = await this.db.client.timeEntry.updateMany({
-      where: { id, companyId, clockOutAt: null, voidedAt: null },
+      where: { id, companyId, clockOutAt: null, voidedAt: null, clockInAt: expectedClockInAt },
       data: { clockOutAt: at, closeSource },
     });
     return count === 1;

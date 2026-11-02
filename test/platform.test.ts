@@ -33,6 +33,8 @@ const newCompany = (overrides: Record<string, unknown> = {}) => ({
   timezone: 'America/Denver',
   maxEmployees: 5,
   admin: { email: 'Juan@TallerPerez.com', firstName: 'Juan', lastName: 'Pérez' },
+  // Estos tests entran con la contrasena temporal; el correo se prueba en test/account-access.test.ts
+  delivery: 'temporary_password',
   ...overrides,
 });
 
@@ -252,7 +254,7 @@ describe('PATCH /platform/companies/:id', () => {
     expect(res.body.data).toMatchObject({ name: 'Original', maxEmployees: 50 });
   });
 
-  it('no permite bajar el límite por debajo de los empleados activos', async () => {
+  it('baja el límite por debajo de los activos: nadie pierde el acceso, pero no hay altas', async () => {
     const { app } = createTestApp();
     const { auth } = await platformSession(app);
     const company = await createCompany(prisma, { maxEmployees: 10 });
@@ -261,15 +263,18 @@ describe('PATCH /platform/companies/:id', () => {
     const res = await request(app)
       .patch(api(`/platform/companies/${company.id}`))
       .set(auth)
-      .send({ maxEmployees: 2 });
-    expect(res.status).toBe(409);
-    expect(res.body.error.code).toBe('MAX_EMPLOYEES_BELOW_ACTIVE');
-
-    await request(app)
-      .patch(api(`/platform/companies/${company.id}`))
-      .set(auth)
-      .send({ maxEmployees: 3 })
+      .send({ maxEmployees: 2 })
       .expect(200);
+    // Los tres siguen activos: el limite no desactiva a nadie
+    expect(res.body.data).toMatchObject({ maxEmployees: 2, activeEmployees: 3 });
+
+    const event = await prisma.securityEvent.findFirstOrThrow({
+      where: { companyId: company.id, type: 'company.updated' },
+    });
+    expect(event.metadata).toMatchObject({
+      maxEmployees: { from: 10, to: 2 },
+      activeEmployees: 3,
+    });
   });
 
   it('exige al menos un campo', async () => {
@@ -348,6 +353,7 @@ describe('POST /platform/companies/:id/admin/reset-password', () => {
     const res = await request(app)
       .post(api(`/platform/companies/${company.id}/admin/reset-password`))
       .set(auth)
+      .send({ delivery: 'temporary_password' })
       .expect(200);
     const { temporaryPassword, admin } = res.body.data;
     expect(admin.id).toBe(companyAdmin.id);

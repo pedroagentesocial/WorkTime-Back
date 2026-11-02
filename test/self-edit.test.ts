@@ -183,6 +183,66 @@ describe('El empleado corrige sus horas', () => {
     await correct(app, asAna, morning, { clockInAt: '2026-10-06T08:30:00-06:00' }).expect(200);
   });
 
+  it('sin límite diario no puede estirar un marcaje a más de 24 h', async () => {
+    const { app, company, ana, asAdmin, asAna } = await setup();
+    const entry = await addEntry(company.id, ana.id, '2026-10-04', '08:00', '17:00');
+    await allow(app, asAdmin, ana.id);
+
+    const res = await correct(app, asAna, entry, { clockOutAt: '2026-10-07T09:00:00-06:00' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('SELF_EDIT_TOO_LONG');
+    // Un turno nocturno que termina al dia siguiente si se puede
+    await correct(app, asAna, entry, { clockOutAt: '2026-10-05T02:00:00-06:00' }).expect(200);
+  });
+
+  it('no alarga un marcaje con horas extra autorizadas por el admin', async () => {
+    const { app, company, ana, asAdmin, asAna } = await setup();
+    const entry = await addEntry(company.id, ana.id, '2026-10-06', '08:00', '18:00');
+    await prisma.timeEntry.update({ where: { id: entry }, data: { dailyLimitWaived: true } });
+    await allow(app, asAdmin, ana.id, { dailyLimitMinutes: 480 });
+
+    const res = await correct(app, asAna, entry, { clockOutAt: '2026-10-06T20:00:00-06:00' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('SELF_EDIT_OVER_LIMIT');
+    await correct(app, asAna, entry, { clockOutAt: '2026-10-06T17:00:00-06:00' }).expect(200);
+  });
+
+  it('una entrada abierta de otro día se mide hasta ahora contra su límite', async () => {
+    const { app, company, ana, asAdmin, asAna } = await setup();
+    // Turno nocturno que sigue abierto: empezo ayer a las 22:00 y ahora es mediodia
+    const entry = await addEntry(company.id, ana.id, '2026-10-06', '22:00', null);
+    await allow(app, asAdmin, ana.id, { dailyLimitMinutes: 1200 });
+
+    const res = await correct(app, asAna, entry, { clockInAt: '2026-10-06T06:00:00-06:00' });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe('SELF_EDIT_TOO_LONG');
+    // 22 h hasta ahora: no pasa de 24 h pero si de su limite de 20 h
+    const late = await correct(app, asAna, entry, { clockInAt: '2026-10-06T14:00:00-06:00' });
+    expect(late.status).toBe(409);
+    expect(late.body.error.code).toBe('SELF_EDIT_OVER_LIMIT');
+  });
+
+  it('una salida leída antes de una corrección de la entrada no cierra el marcaje cambiado', async () => {
+    const { container } = createTestApp();
+    const company = await createCompany(prisma);
+    const ana = await createEmployee(prisma, company.id, { firstName: 'Ana' });
+    const entry = await addEntry(company.id, ana.employee.id, '2026-10-06', '22:00', null);
+    const readClockIn = new Date('2026-10-06T22:00:00-06:00');
+    // La correccion simultanea movio la entrada despues de que la salida la leyera
+    await prisma.timeEntry.update({
+      where: { id: entry },
+      data: { clockInAt: new Date('2026-10-06T06:00:00-06:00') },
+    });
+
+    const repository = container.cradle.timeEntryRepository;
+    const closeAt = new Date('2026-10-07T02:00:00-06:00');
+    expect(await repository.closeIfOpen(company.id, entry, closeAt, 'employee', readClockIn)).toBe(
+      false,
+    );
+    const stored = await prisma.timeEntry.findUniqueOrThrow({ where: { id: entry } });
+    expect(stored.clockOutAt).toBeNull();
+  });
+
   it('nunca dentro de un periodo cerrado', async () => {
     const { app, company, ana, asAdmin, asAna } = await setup();
     const entry = await addEntry(company.id, ana.id, '2026-10-02', '08:00', '12:00');

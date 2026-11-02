@@ -2,7 +2,13 @@ import { MAX_DAILY_LIMIT_MINUTES } from '#shared/domain/daily-limit.js';
 import { COMPANY_LIMITS } from '#shared/domain/company-rules.js';
 import { PAY_KINDS, PAY_LIMITS } from '#shared/domain/pay-rules.js';
 import type { EmployeePayRates } from '../application/pay-rate.use-cases.js';
-import { emailSchema, paginationQuery, personNameSchema } from '#shared/http/schemas.js';
+import {
+  accessDeliveryInput,
+  accessResultShape,
+  emailSchema,
+  paginationQuery,
+  personNameSchema,
+} from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
 import type { CompanySettingsView } from '../application/ports/company-settings.repository.js';
 import type { WorkSiteView } from '../application/ports/work-site.repository.js';
@@ -245,6 +251,7 @@ export const createEmployeeBody = z
         'Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado.',
     }),
     timezone: employeeTimezone.optional(),
+    delivery: accessDeliveryInput,
   })
   .strict()
   .openapi('CreateEmployeeRequest');
@@ -359,10 +366,7 @@ export const employeeSchema = z
 export const employeeWithPasswordSchema = z
   .object({
     employee: employeeSchema,
-    temporaryPassword: z.string().openapi({
-      description: 'Se muestra UNA sola vez; entrégala de forma segura al empleado.',
-    }),
-    temporaryPasswordExpiresAt: z.iso.datetime(),
+    ...accessResultShape,
   })
   .openapi('EmployeeWithTemporaryPassword');
 

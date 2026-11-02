@@ -1,6 +1,12 @@
 import { Permission } from '#shared/domain/permissions.js';
 import { created, defineRoute, ok, paginated, type AnyRoute } from '#shared/http/route.js';
-import { dataResponse, idParams, pageResponse } from '#shared/http/schemas.js';
+import {
+  dataResponse,
+  idParams,
+  pageResponse,
+  resetAccessBody,
+  toAccessDto,
+} from '#shared/http/schemas.js';
 import type { AssignCompanyToMultiAdminUseCase } from '../application/assign-company-to-multi-admin.use-case.js';
 import type { ChangeMultiAdminStatusUseCase } from '../application/change-multi-admin-status.use-case.js';
 import type { CreateMultiAdminUseCase } from '../application/create-multi-admin.use-case.js';
@@ -67,8 +73,7 @@ export function multiAdminRoutes(deps: Deps): AnyRoute[] {
         const result = await deps.createMultiAdmin.execute({ actor, client: request, ...body });
         return created({
           multiAdmin: toMultiAdminDto(result.multiAdmin),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),
@@ -177,7 +182,7 @@ export function multiAdminRoutes(deps: Deps): AnyRoute[] {
         'y desbloquea su cuenta.',
       tags: TAGS,
       auth: AUTH,
-      request: { params: idParams },
+      request: { params: idParams, body: resetAccessBody },
       responses: {
         200: {
           description: 'Contraseña restablecida',
@@ -185,16 +190,16 @@ export function multiAdminRoutes(deps: Deps): AnyRoute[] {
         },
         404: NOT_FOUND,
       },
-      handler: async ({ actor, params, request }) => {
+      handler: async ({ actor, params, body, request }) => {
         const result = await deps.resetMultiAdminPassword.execute({
           actor,
           client: request,
           multiAdminId: params.id,
+          delivery: body?.delivery,
         });
         return ok({
           multiAdmin: toMultiAdminDto(result.multiAdmin),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),

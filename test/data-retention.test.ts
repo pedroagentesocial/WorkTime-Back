@@ -112,12 +112,16 @@ describe('limpieza de eventos de seguridad', () => {
     );
   });
 
-  it('se conserva la actividad que ve el admin y los cambios de sueldo', () => {
+  it('se conserva la actividad que ve el admin y todo lo que cambia el pago', () => {
     expect([...KEPT_FOREVER_EVENT_TYPES].sort()).toEqual(
       [
         ...ATTENDANCE_ACTIVITY_TYPES,
         'employee.pay_rate_changed',
         'employee.pay_rate_removed',
+        'employee.deactivated',
+        'employee.reactivated',
+        'employee.updated',
+        'company.settings_updated',
       ].sort(),
     );
   });

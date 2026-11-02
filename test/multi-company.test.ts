@@ -29,12 +29,15 @@ const newMultiAdmin = (overrides: Record<string, unknown> = {}) => ({
   lastName: 'Gómez',
   maxCompanies: 3,
   maxEmployeesPerCompany: 25,
+  delivery: 'temporary_password',
   ...overrides,
 });
 
 const newOwnCompany = (overrides: Record<string, unknown> = {}) => ({
   name: 'Sucursal Norte',
   admin: { email: `${uuidv7()}@sucursal.com`, firstName: 'Juan', lastName: 'Pérez' },
+  // Estos tests entran con la contrasena temporal; el correo se prueba en test/account-access.test.ts
+  delivery: 'temporary_password',
   ...overrides,
 });
 
@@ -292,6 +295,7 @@ describe('Platform: gestión de administradores multiempresa', () => {
     const res = await request(app)
       .post(api(`/platform/multi-admins/${laura.id}/reset-password`))
       .set(auth)
+      .send({ delivery: 'temporary_password' })
       .expect(200);
     expect(res.body.data.temporaryPassword).toHaveLength(16);
 
@@ -375,7 +379,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const laura = await createMultiAdmin(prisma, { companyIds: [a.id, b.id] });
     const session = await multiAdminSession(app, laura);
 
-    const inA = bearer((await switchCompany(app, session.accessToken, a.id)).accessToken);
+    const inA = bearer((await switchCompany(app, session, a.id)).accessToken);
     const me = await request(app).get(api('/auth/me')).set(inA).expect(200);
     expect(me.body.data.company).toMatchObject({ id: a.id, name: 'Empresa A' });
 
@@ -390,7 +394,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
       .set(inA);
     expect(peek.status).toBe(404);
 
-    const inB = bearer((await switchCompany(app, session.accessToken, b.id)).accessToken);
+    const inB = bearer((await switchCompany(app, session, b.id)).accessToken);
     const listB = await request(app).get(api('/company/employees')).set(inB).expect(200);
     expect((listB.body.data as { userId: string }[]).map((item) => item.userId)).toEqual([
       employeeB.id,
@@ -402,7 +406,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const company = await createCompany(prisma);
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await multiAdminSession(app, laura);
-    const auth = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    const auth = bearer((await switchCompany(app, session, company.id)).accessToken);
 
     const created = await request(app)
       .post(api('/company/employees'))
@@ -425,7 +429,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const company = await createCompany(prisma, { maxEmployees: 10 });
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await multiAdminSession(app, laura);
-    const auth = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    const auth = bearer((await switchCompany(app, session, company.id)).accessToken);
 
     const limit = await request(app).patch(api('/company')).set(auth).send({ maxEmployees: 500 });
     expect(limit.status).toBe(400);
@@ -447,7 +451,10 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const session = await multiAdminSession(app, laura);
 
     const pick = (companyId: string) =>
-      request(app).post(api('/auth/active-company')).set(session.auth).send({ companyId });
+      request(app)
+        .post(api('/auth/active-company'))
+        .set(session.auth)
+        .send({ companyId, refreshToken: session.refreshToken });
 
     const ajena = await pick(foreign.id);
     const inexistente = await pick(uuidv7());
@@ -465,14 +472,42 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const company = await createCompany(prisma);
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await multiAdminSession(app, laura);
-    const inCompany = await switchCompany(app, session.accessToken, company.id);
+    const inCompany = await switchCompany(app, session, company.id);
 
-    const back = await switchCompany(app, inCompany.accessToken, null);
+    const back = await switchCompany(app, inCompany, null);
     const me = await request(app).get(api('/auth/me')).set(bearer(back.accessToken)).expect(200);
     expect(me.body.data.company).toBeNull();
     expect(
       await eventTypes({ userId: laura.id, type: 'session.active_company_changed' }),
     ).toHaveLength(2);
+  });
+
+  it('cambiar de empresa rota la sesión actual sin reiniciar su duración máxima', async () => {
+    const { app } = createTestApp();
+    const company = await createCompany(prisma);
+    const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
+    const other = await createMultiAdmin(prisma, { companyIds: [company.id] });
+    const session = await multiAdminSession(app, laura);
+    const used = session.refreshToken;
+    const pick = (refreshToken: string) =>
+      request(app)
+        .post(api('/auth/active-company'))
+        .set(session.auth)
+        .send({ companyId: company.id, refreshToken });
+
+    // Un access token solo no basta: hace falta el refresh token de una sesion propia y viva
+    const foreign = await pick((await multiAdminSession(app, other)).refreshToken);
+    expect(foreign.status).toBe(401);
+    expect(foreign.body.error.code).toBe('INVALID_REFRESH_TOKEN');
+
+    await switchCompany(app, session, company.id);
+    const reused = await pick(used);
+    expect(reused.status).toBe(401);
+    expect(reused.body.error.code).toBe('INVALID_REFRESH_TOKEN');
+
+    const tokens = await prisma.refreshToken.findMany({ where: { userId: laura.id } });
+    expect(tokens).toHaveLength(2);
+    expect(new Set(tokens.map((token) => token.familyId)).size).toBe(1);
   });
 
   it('un admin de empresa o un empleado no pueden elegir empresa', async () => {
@@ -497,7 +532,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const company = await createCompany(prisma, { name: 'Empresa A' });
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await multiAdminSession(app, laura);
-    const inCompany = await switchCompany(app, session.accessToken, company.id);
+    const inCompany = await switchCompany(app, session, company.id);
 
     const refreshed = await request(app)
       .post(api('/auth/refresh'))
@@ -518,7 +553,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const other = await createCompany(prisma);
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id, other.id] });
     const session = await multiAdminSession(app, laura);
-    const inCompany = await switchCompany(app, session.accessToken, company.id);
+    const inCompany = await switchCompany(app, session, company.id);
     const auth = bearer(inCompany.accessToken);
 
     await request(app).get(api('/company/employees')).set(auth).expect(200);
@@ -535,12 +570,13 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
       .send({ refreshToken: inCompany.refreshToken });
     expect(refresh.status).toBe(401);
 
-    // Sigue pudiendo entrar a la otra empresa que conserva
-    await switchCompany(app, session.accessToken, other.id);
+    // Renovar con la empresa perdida cerro esa sesion: entra de nuevo y sigue con la otra empresa
+    const again = await multiAdminSession(app, laura);
+    await switchCompany(app, again, other.id);
     const gone = await request(app)
       .post(api('/auth/active-company'))
-      .set(session.auth)
-      .send({ companyId: company.id });
+      .set(again.auth)
+      .send({ companyId: company.id, refreshToken: again.refreshToken });
     expect(gone.status).toBe(404);
   });
 
@@ -551,7 +587,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const other = await createCompany(prisma);
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id, other.id] });
     const session = await multiAdminSession(app, laura);
-    const auth = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    const auth = bearer((await switchCompany(app, session, company.id)).accessToken);
 
     await request(app)
       .patch(api(`/platform/companies/${company.id}/status`))
@@ -565,11 +601,11 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const pick = await request(app)
       .post(api('/auth/active-company'))
       .set(session.auth)
-      .send({ companyId: company.id });
+      .send({ companyId: company.id, refreshToken: session.refreshToken });
     expect(pick.status).toBe(403);
     expect(pick.body.error.code).toBe('COMPANY_SUSPENDED');
 
-    await switchCompany(app, session.accessToken, other.id);
+    await switchCompany(app, session, other.id);
   });
 
   it('la membresía de una persona no sirve a otra', async () => {
@@ -582,7 +618,7 @@ describe('Sesión y aislamiento del administrador multiempresa', () => {
     const res = await request(app)
       .post(api('/auth/active-company'))
       .set(session.auth)
-      .send({ companyId: company.id });
+      .send({ companyId: company.id, refreshToken: session.refreshToken });
     expect(res.status).toBe(404);
   });
 });
@@ -596,7 +632,7 @@ describe('Acciones sobre las horas en la empresa activa', () => {
     const { employee } = await createEmployee(prisma, company.id);
     const laura = await createMultiAdmin(prisma, { companyIds: [company.id] });
     const session = await multiAdminSession(app, laura);
-    const auth = bearer((await switchCompany(app, session.accessToken, company.id)).accessToken);
+    const auth = bearer((await switchCompany(app, session, company.id)).accessToken);
     return { app, company, employee, laura, auth };
   }
 
@@ -714,7 +750,7 @@ describe('Crear empresas dentro del paquete', () => {
     // La nueva empresa aparece en su lista y puede trabajar en ella
     const mine = await request(app).get(api('/portfolio/companies')).set(session.auth).expect(200);
     expect(mine.body.data.limits.usedCompanies).toBe(1);
-    await switchCompany(app, session.accessToken, company.id);
+    await switchCompany(app, session, company.id);
   });
 
   it('no pasa de su máximo de empresas, contando las asignadas por el admin global', async () => {

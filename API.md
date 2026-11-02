@@ -246,15 +246,33 @@ Cuando una petición responde `401` con `TOKEN_EXPIRED`, llama a `POST /auth/ref
 
 > Un access token **ya emitido** deja de servir al instante si el usuario cambia su contraseña, es desactivado, se le cierran todas las sesiones o su empresa se suspende. En cada petición el servidor lo verifica.
 
+### Acceso de una cuenta nueva o restablecida
+
+Al dar de alta a un empleado, una empresa con su admin o un admin multiempresa, y al restablecer la contraseña de alguien, la persona recibe su acceso de una de dos formas (campo `delivery` del cuerpo; sin él, por correo):
+
+- **`email`** (por defecto): le llega un correo con un enlace de un solo uso para crear su contraseña (`APP_URL/crear-contrasena?token=…` al darla de alta, `APP_URL/restablecer-contrasena?token=…` al restablecer). Vence a las **72 horas** y se confirma con `POST /auth/password-reset/confirm`. Nadie ve ninguna contraseña. Si el correo no sale, la respuesta trae `emailSent: false`: se reenvía con el botón de restablecer o se le da una temporal.
+- **`temporary_password`**: para quien no usa correo. Se usa también, sin pedirlo, si los correos no están configurados o el correo es de un dominio de pruebas (`.test`, `.example`…).
+
+La respuesta trae `delivery`, `emailSent`, `temporaryPassword` (solo con la temporal; `null` con correo) y `temporaryPasswordExpiresAt` (cuándo vence el enlace o la temporal). Restablecer, por cualquiera de las dos vías, deja sin servir la contraseña anterior y cierra sus sesiones.
+
 ### Contraseña temporal
 
-Cuando el admin da de alta a un empleado o restablece una contraseña, el sistema genera una **contraseña temporal** (se muestra **una sola vez**). Dura 72 horas.
+Cuando se elige la **contraseña temporal**, se muestra **una sola vez** y dura 72 horas.
 
 1. El usuario inicia sesión con ella. La respuesta trae `user.mustChangePassword: true`.
 2. Mientras tenga contraseña temporal, **solo puede** consultar `GET /auth/me`, cambiar la contraseña con `PATCH /auth/me/password` y cerrar sus sesiones. Cualquier otra ruta responde `403 PASSWORD_CHANGE_REQUIRED`.
 3. Al cambiarla, la respuesta trae una **sesión nueva** y las anteriores se cierran.
 
 Una contraseña nueva debe tener **al menos 12 caracteres** (máximo 128), ser distinta de la actual, no ser igual al email y no ser una contraseña trivial (un mismo carácter repetido, `123456789012`, `password1234`...). Si no cumple, responde `400 WEAK_PASSWORD` con los motivos en `error.details`.
+
+### Recuperar la contraseña por correo
+
+Quien olvidó su contraseña la recupera sin sesión:
+
+1. `POST /auth/password-reset` con su `email`. Si es de una cuenta con acceso, le llega un correo con un enlace a `APP_URL/restablecer-contrasena?token=…`. Responde **siempre `204`**, exista o no la cuenta, para no revelar qué correos están registrados. Manda como máximo un correo por minuto a la misma persona.
+2. `POST /auth/password-reset/confirm` con ese `token` y la `newPassword`. Pone la contraseña nueva, **cierra todas las sesiones** y quita el bloqueo por intentos. Después hay que iniciar sesión.
+
+El enlace sirve **una sola vez** y vence a los **30 minutos**; pedir otro anula el anterior. Un enlace usado, vencido o inventado responde `400 INVALID_RESET_TOKEN`. El admin global no se recupera por aquí, solo desde la terminal del servidor (`npm run admin:recover`), ni las cuentas desactivadas o de una empresa suspendida. Los correos salen por Resend con `RESEND_API_KEY`, `EMAIL_FROM` y `APP_URL` del `.env` (sin ellas la API funciona y no envía correos) y nunca a dominios reservados para pruebas (`.test`, `.example`, `.invalid`, `.localhost`).
 
 ### Bloqueo por intentos fallidos
 
@@ -360,7 +378,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 **Aislamiento entre empresas.** La empresa **sale siempre del token**, nunca de lo que mande el cliente. Un recurso de otra empresa responde `404`, igual que uno que no existe.
 
-**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una y recibe una sesión nueva cuya empresa activa es esa. Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
+**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una mandando también el `refreshToken` de su sesión actual, que se cambia por un par nuevo cuya empresa activa es esa (el refresh token enviado queda anulado y la sesión conserva su duración máxima de 30 días; un token ajeno, ya usado o vencido responde `401 INVALID_REFRESH_TOKEN`). Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
 
 ---
 
@@ -394,7 +412,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 - El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), con un último día opcional (`selfEditUntil`). Sin fecha, dura hasta que lo quite.
 - Con el permiso, `PATCH /me/time-entries/{id}` cambia la entrada o la salida de un marcaje suyo, también para poner la salida que olvidó un día anterior. El motivo es obligatorio.
-- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
+- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`; una entrada abierta de un día anterior se mide hasta ahora, y un marcaje con horas extra autorizadas por el admin no se puede alargar). Un marcaje corregido por el empleado no dura más de 24 horas aunque no haya límite diario (`409 SELF_EDIT_TOO_LONG`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
 - `GET /me/clock-status` trae `selfEdit` (días y vencimiento; `null` si hoy no puede). Cada cambio queda en el historial del marcaje y en la actividad del admin como `time_entry.corrected_by_employee`, que nunca se purga.
 
 ### Correcciones, registros manuales y anulaciones (admin)
@@ -580,7 +598,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 - `POST /platform/companies` crea una empresa **junto con su admin**. Devuelve la empresa (con su código) y la **contraseña temporal del admin, una sola vez**.
 - `GET /platform/companies` lista las empresas. Con `search` busca por nombre, código o prefijo.
-- `GET` y `PATCH /platform/companies/{id}` ven y editan una empresa (nombre, zona y límite de empleados).
+- `GET` y `PATCH /platform/companies/{id}` ven y editan una empresa (nombre, zona y límite de empleados). El límite puede quedar por debajo de los empleados activos, por ejemplo al bajar de plan: nadie pierde el acceso ni sus horas, pero la empresa queda **excedida** y no puede dar de alta ni reactivar empleados (`409 EMPLOYEE_LIMIT_REACHED`) hasta que su admin desactive a los que sobran. El cambio se audita con el límite anterior, el nuevo y los activos.
 - `PATCH /platform/companies/{id}/status` suspende o activa una empresa: al suspenderla, **nadie** de esa empresa puede usar el sistema.
 - `POST /platform/companies/{id}/admin/reset-password` genera una contraseña temporal para el admin de la empresa.
 
@@ -703,6 +721,8 @@ Cada endpoint indica el permiso que exige, qué parámetros recibe, qué devuelv
 - [`POST /auth/active-company`](#op-post-auth-active-company) — Elegir la empresa con la que trabajo
 - [`POST /auth/me/logout-all`](#op-post-auth-me-logout-all) — Cerrar todas mis sesiones
 - [`PATCH /auth/me/password`](#op-patch-auth-me-password) — Cambiar mi contraseña
+- [`POST /auth/password-reset`](#op-post-auth-password-reset) — Pedir un enlace para restablecer la contraseña
+- [`POST /auth/password-reset/confirm`](#op-post-auth-password-reset-confirm) — Restablecer la contraseña con el enlace del correo
 
 **Plataforma · Empresas**
 
@@ -972,13 +992,14 @@ Solo nombre y apellido. El email es la identidad de acceso y no se edita aquí.
 
 **Acceso:** permiso `portfolio.read` (multi_company_admin).
 
-Solo para el admin multiempresa. Emite una sesión nueva cuya empresa activa es la elegida; desde ahí se trabaja como admin de esa empresa. Con `companyId: null` la sesión queda sin empresa activa. Las sesiones anteriores siguen válidas hasta cerrarlas.
+Solo para el admin multiempresa. Cambia el refresh token de la sesión actual por un par nuevo cuya empresa activa es la elegida; desde ahí se trabaja como admin de esa empresa. Con `companyId: null` la sesión queda sin empresa activa. El refresh token enviado queda anulado y la sesión conserva su duración máxima de 30 días.
 
 **Cuerpo (JSON):**
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `companyId` | texto (uuid) o null | sí | Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, para ver el resumen de todas tus empresas. |
+| `refreshToken` | texto | sí | El refresh token de la sesión actual: se reemplaza por el nuevo sin reiniciar la duración máxima de la sesión. (32 a 256 caracteres) |
 
 **Respuesta 200:** Sesión nueva
 
@@ -989,7 +1010,7 @@ Solo para el admin multiempresa. Emite una sesión nueva cuya empresa activa es 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
 | 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
-| 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
+| 401 | `INVALID_REFRESH_TOKEN` · `SESSION_MAX_AGE_REACHED` · `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | El refresh token no es de esta sesión, ya se usó o la sesión llegó a su máximo |
 | 403 | `COMPANY_SUSPENDED` · `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` | La empresa está suspendida |
 | 404 | `COMPANY_NOT_FOUND` | La empresa no existe o no está asignada a la cuenta |
 
@@ -1039,6 +1060,53 @@ Cierra todas las sesiones abiertas del usuario y devuelve una sesión nueva. Es 
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 429 | `ACCOUNT_LOCKED` | Demasiados intentos fallidos |
+
+<a id="op-post-auth-password-reset"></a>
+#### `POST /auth/password-reset`
+
+**Pedir un enlace para restablecer la contraseña**
+
+**Acceso:** público (no lleva token).
+
+Si el correo es de una cuenta con acceso, le envía un enlace de un solo uso que vence en 30 minutos (como máximo uno por minuto). Responde igual exista o no la cuenta, para no revelar qué correos están registrados. El admin global no se recupera por aquí, solo desde la terminal del servidor.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `email` | texto | sí | (ej. `"ana@empresa.com"`) |
+
+**Respuesta 204:** Si la cuenta existe, se envió el correo
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
+
+<a id="op-post-auth-password-reset-confirm"></a>
+#### `POST /auth/password-reset/confirm`
+
+**Restablecer la contraseña con el enlace del correo**
+
+**Acceso:** público (no lleva token).
+
+Pone la contraseña nueva, cierra todas las sesiones y quita el bloqueo por intentos. El enlace queda usado. Después hay que iniciar sesión.
+
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `token` | texto | sí | El que llega en el enlace del correo. (32 a 256 caracteres) |
+| `newPassword` | texto | sí | Mínimo 12 caracteres; distinta del email. (0 a 128 caracteres) |
+
+**Respuesta 204:** Contraseña restablecida
+
+**Errores:**
+
+| HTTP | Códigos `error.code` | Cuándo |
+| --- | --- | --- |
+| 400 | `INVALID_RESET_TOKEN` · `WEAK_PASSWORD` · `VALIDATION_ERROR` · `INVALID_JSON` | Enlace inválido, usado o vencido, o contraseña débil |
 
 ### Plataforma · Empresas
 
@@ -1101,6 +1169,7 @@ Crea la empresa y su admin en una sola operación. Devuelve una contraseña temp
 | `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
 | `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
 | `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 **Respuesta 201:** Empresa creada
 
@@ -1148,7 +1217,7 @@ Crea la empresa y su admin en una sola operación. Devuelve una contraseña temp
 
 **Acceso:** permiso `companies.manage` (admin global).
 
-Solo se modifican los campos enviados.
+Solo se modifican los campos enviados. `maxEmployees` puede quedar por debajo de los empleados activos (por ejemplo al bajar de plan): nadie pierde el acceso, pero la empresa queda excedida y no puede dar de alta ni reactivar empleados hasta quedar dentro.
 
 **Parámetros de la ruta:**
 
@@ -1176,7 +1245,6 @@ Solo se modifican los campos enviados.
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `COMPANY_NOT_FOUND` | La empresa no existe |
-| 409 | `MAX_EMPLOYEES_BELOW_ACTIVE` | El límite es menor a los empleados activos |
 
 <a id="op-patch-platform-companies-id-status"></a>
 #### `PATCH /platform/companies/{id}/status`
@@ -1227,6 +1295,12 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas las sesi
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
 
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
+
 **Respuesta 200:** Contraseña restablecida
 
 - `data`: [ResetAdminPasswordResponse](#schema-resetadminpasswordresponse)
@@ -1235,7 +1309,7 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas las sesi
 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `COMPANY_NOT_FOUND` · `COMPANY_ADMIN_NOT_FOUND` | Empresa o admin inexistente |
@@ -1299,6 +1373,7 @@ Lo crea sin empresas, con su paquete: máximo de empresas y de empleados por emp
 | `lastName` | texto | sí | (1 a 100 caracteres; ej. `"Gómez"`) |
 | `maxCompanies` | entero | sí | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
 | `maxEmployeesPerCompany` | entero | sí | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 **Respuesta 201:** Creado
 
@@ -1426,6 +1501,12 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas sus sesi
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
 
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
+
 **Respuesta 200:** Contraseña restablecida
 
 - `data`: [CreateMultiAdminResponse](#schema-createmultiadminresponse)
@@ -1434,7 +1515,7 @@ Genera una contraseña temporal (se muestra una sola vez), cierra todas sus sesi
 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `MULTI_ADMIN_NOT_FOUND` | El administrador multiempresa no existe |
@@ -1540,10 +1621,11 @@ Crea la empresa con su admin y me la asigna. Su máximo de empleados es el que f
 | --- | --- | --- | --- |
 | `name` | texto | sí | (2 a 150 caracteres; ej. `"Sucursal Norte"`) |
 | `timezone` | texto | no | Zona horaria IANA. Si se omite se usa America/Denver. (1 a 64 caracteres) |
-| `admin` | objeto | sí | El admin de la nueva empresa. Recibe una contraseña temporal. |
+| `admin` | objeto | sí | El admin de la nueva empresa. Recibe un correo para crear su contraseña. |
 | `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
 | `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
 | `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 **Respuesta 201:** Empresa creada
 
@@ -1761,6 +1843,7 @@ Crea el empleado con su usuario y una contraseña temporal (se muestra una sola 
 | `phone` | texto o null | no | Teléfono de contacto opcional (solo informativo). `null` o vacío = sin teléfono. (0 a 30 caracteres; ej. `"+52 33 1234 5678"`) |
 | `hiredAt` | fecha AAAA-MM-DD o null | no | Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado. (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 **Respuesta 201:** Empleado creado
 
@@ -2042,6 +2125,12 @@ Genera una contraseña temporal (se muestra una sola vez), cierra sus sesiones y
 | --- | --- | --- | --- |
 | `id` | texto (uuid) | sí | — |
 
+**Cuerpo (JSON):**
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
+
 **Respuesta 200:** Contraseña restablecida
 
 - `data`: [EmployeeWithTemporaryPassword](#schema-employeewithtemporarypassword)
@@ -2050,7 +2139,7 @@ Genera una contraseña temporal (se muestra una sola vez), cierra sus sesiones y
 
 | HTTP | Códigos `error.code` | Cuándo |
 | --- | --- | --- |
-| 400 | `VALIDATION_ERROR` | Datos inválidos |
+| 400 | `VALIDATION_ERROR` · `INVALID_JSON` | Datos inválidos |
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sesión válida pero sin acceso a esta acción |
 | 404 | `EMPLOYEE_NOT_FOUND` | El empleado no existe en tu empresa |
@@ -2714,7 +2803,7 @@ Solo si el admin te dio permiso y no ha vencido (`selfEdit` en `/me/clock-status
 | 401 | `MISSING_TOKEN` · `INVALID_TOKEN` · `TOKEN_EXPIRED` · `SESSION_REVOKED` | Sin sesión válida: inicia sesión o renueva el token |
 | 403 | `SELF_EDIT_NOT_ALLOWED` · `FORBIDDEN` · `PASSWORD_CHANGE_REQUIRED` · `USER_INACTIVE` · `COMPANY_SUSPENDED` | Sin permiso para corregir |
 | 404 | `TIME_ENTRY_NOT_FOUND` · `EMPLOYEE_PROFILE_NOT_FOUND` | El marcaje no existe o no es tuyo |
-| 409 | `SELF_EDIT_OUT_OF_RANGE` · `SELF_EDIT_OPEN_TODAY` · `SELF_EDIT_OVER_LIMIT` · `TIME_ENTRY_OVERLAP` · `TIME_ENTRY_CHANGED` · `TIME_ENTRY_VOIDED` · `PERIOD_CLOSED` | El cambio no se puede hacer |
+| 409 | `SELF_EDIT_OUT_OF_RANGE` · `SELF_EDIT_OPEN_TODAY` · `SELF_EDIT_OVER_LIMIT` · `SELF_EDIT_TOO_LONG` · `TIME_ENTRY_OVERLAP` · `TIME_ENTRY_CHANGED` · `TIME_ENTRY_VOIDED` · `PERIOD_CLOSED` | El cambio no se puede hacer |
 
 ### Empresa · Asistencia
 
@@ -3718,14 +3807,15 @@ Para un check-in registrado por error. No se borra: queda con quién lo anuló, 
 | `INVALID_CURRENT_PASSWORD` | 400 | `PATCH /auth/me/password` |
 | `INVALID_DAILY_REPORT` | 400 | `POST /me/clock-out`, `PUT /me/daily-reports/{date}` |
 | `INVALID_DATE_RANGE` | 400 | 12 endpoints |
-| `INVALID_JSON` | 400 | 32 endpoints |
+| `INVALID_JSON` | 400 | 37 endpoints |
 | `INVALID_LOCATION` | 400 | `POST /me/clock-in`, `POST /me/check-ins` |
 | `INVALID_MAX_COMPANIES` | 400 | `POST /platform/multi-admins`, `PATCH /platform/multi-admins/{id}` |
 | `INVALID_MAX_EMPLOYEES` | 400 | 4 endpoints |
 | `INVALID_PHONE` | 400 | `POST /company/employees`, `PATCH /company/employees/{id}` |
 | `INVALID_REASON` | 400 | 5 endpoints |
-| `INVALID_REFRESH_TOKEN` | 401 | `POST /auth/refresh` |
+| `INVALID_REFRESH_TOKEN` | 401 | `POST /auth/refresh`, `POST /auth/active-company` |
 | `INVALID_REPORT_DATE` | 400 | `PUT /me/daily-reports/{date}` |
+| `INVALID_RESET_TOKEN` | 400 | `POST /auth/password-reset/confirm` |
 | `INVALID_STATUS_DATE` | 400 | `PATCH /company/employees/{id}/status` |
 | `INVALID_TIME_RANGE` | 400 | `PATCH /me/time-entries/{id}`, `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `INVALID_TIMEZONE` | 400 | 6 endpoints |
@@ -3734,7 +3824,6 @@ Para un check-in registrado por error. No se borra: queda con quién lo anuló, 
 | `MANUAL_ENTRY_TOO_OLD` | 400 | `POST /company/employees/{id}/time-entries` |
 | `MAX_COMPANIES_BELOW_ASSIGNED` | 409 | `PATCH /platform/multi-admins/{id}` |
 | `MAX_COMPANIES_REACHED` | 409 | `POST /platform/multi-admins/{id}/companies`, `POST /portfolio/companies` |
-| `MAX_EMPLOYEES_BELOW_ACTIVE` | 409 | `PATCH /platform/companies/{id}` |
 | `MEMBERSHIP_NOT_FOUND` | 404 | `DELETE /platform/multi-admins/{id}/companies/{companyId}` |
 | `MISSING_TOKEN` | 401 | 84 endpoints |
 | `MULTI_ADMIN_NOT_FOUND` | 404 | 6 endpoints |
@@ -3755,7 +3844,8 @@ Para un check-in registrado por error. No se borra: queda con quién lo anuló, 
 | `SELF_EDIT_OPEN_TODAY` | 409 | `PATCH /me/time-entries/{id}` |
 | `SELF_EDIT_OUT_OF_RANGE` | 409 | `PATCH /me/time-entries/{id}` |
 | `SELF_EDIT_OVER_LIMIT` | 409 | `PATCH /me/time-entries/{id}` |
-| `SESSION_MAX_AGE_REACHED` | 401 | `POST /auth/refresh` |
+| `SELF_EDIT_TOO_LONG` | 409 | `PATCH /me/time-entries/{id}` |
+| `SESSION_MAX_AGE_REACHED` | 401 | `POST /auth/refresh`, `POST /auth/active-company` |
 | `SESSION_REVOKED` | 401 | 84 endpoints |
 | `STATUS_DATE_IN_CLOSED_PERIOD` | 409 | `PATCH /company/employees/{id}/status` |
 | `TEMPORARY_PASSWORD_EXPIRED` | 403 | `POST /auth/login` |
@@ -3766,8 +3856,8 @@ Para un check-in registrado por error. No se borra: queda con quién lo anuló, 
 | `TIME_IN_FUTURE` | 400 | `PATCH /me/time-entries/{id}`, `POST /company/employees/{id}/time-entries`, `PATCH /company/time-entries/{id}` |
 | `TOKEN_EXPIRED` | 401 | 84 endpoints |
 | `USER_INACTIVE` | 403 | 86 endpoints |
-| `VALIDATION_ERROR` | 400 | 78 endpoints |
-| `WEAK_PASSWORD` | 400 | `PATCH /auth/me/password` |
+| `VALIDATION_ERROR` | 400 | 80 endpoints |
+| `WEAK_PASSWORD` | 400 | `PATCH /auth/me/password`, `POST /auth/password-reset/confirm` |
 | `WORK_SITE_LIMIT` | 409 | `POST /company/work-sites` |
 | `WORK_SITE_NOT_FOUND` | 404 | `PATCH /company/work-sites/{id}` |
 | `WORK_SITES_REQUIRED` | 409 | `PATCH /company`, `PATCH /company/work-sites/{id}` |
@@ -4116,6 +4206,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
 | `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
 | `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 <a id="schema-createcompanyresponse"></a>
 #### CreateCompanyResponse
@@ -4123,8 +4214,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `company` | [Company](#schema-company) | sí | — |
-| `temporaryPassword` | texto | sí | Contraseña temporal del admin. Se muestra UNA sola vez; entrégala de forma segura. |
-| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | — |
+| `delivery` | `email` \| `temporary_password` | sí | Cómo recibió su acceso. |
+| `emailSent` | booleano | sí | false si el correo no se pudo enviar: reenvíalo o dale una contraseña temporal. |
+| `temporaryPassword` | texto o null | sí | Solo con `temporary_password`. Se muestra UNA sola vez; entrégala de forma segura. |
+| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | Cuándo vence el enlace o la contraseña temporal (72 horas). |
 
 <a id="schema-createemployeerequest"></a>
 #### CreateEmployeeRequest
@@ -4137,6 +4230,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `phone` | texto o null | no | Teléfono de contacto opcional (solo informativo). `null` o vacío = sin teléfono. (0 a 30 caracteres; ej. `"+52 33 1234 5678"`) |
 | `hiredAt` | fecha AAAA-MM-DD o null | no | Fecha de ingreso. Si se omite se registra sola el día del alta, en la zona horaria del empleado. (ej. `"2026-06-01"`) |
 | `timezone` | texto o null | no | Zona horaria IANA del empleado. `null` u omitido = usa la de la empresa. (1 a 64 caracteres; ej. `"America/Mexico_City"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 <a id="schema-createmanualtimeentryrequest"></a>
 #### CreateManualTimeEntryRequest
@@ -4157,6 +4251,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `lastName` | texto | sí | (1 a 100 caracteres; ej. `"Gómez"`) |
 | `maxCompanies` | entero | sí | Cuántas empresas puede tener asignadas o crear (de 1 a 1000; ej. `3`) |
 | `maxEmployeesPerCompany` | entero | sí | Máximo de empleados de cada empresa que cree esa persona (de 1 a 100000; ej. `25`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 <a id="schema-createmultiadminresponse"></a>
 #### CreateMultiAdminResponse
@@ -4164,8 +4259,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `multiAdmin` | [MultiAdmin](#schema-multiadmin) | sí | — |
-| `temporaryPassword` | texto | sí | Contraseña temporal. Se muestra UNA sola vez; entrégala de forma segura. |
-| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | — |
+| `delivery` | `email` \| `temporary_password` | sí | Cómo recibió su acceso. |
+| `emailSent` | booleano | sí | false si el correo no se pudo enviar: reenvíalo o dale una contraseña temporal. |
+| `temporaryPassword` | texto o null | sí | Solo con `temporary_password`. Se muestra UNA sola vez; entrégala de forma segura. |
+| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | Cuándo vence el enlace o la contraseña temporal (72 horas). |
 
 <a id="schema-createowncompanyrequest"></a>
 #### CreateOwnCompanyRequest
@@ -4174,10 +4271,11 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | --- | --- | --- | --- |
 | `name` | texto | sí | (2 a 150 caracteres; ej. `"Sucursal Norte"`) |
 | `timezone` | texto | no | Zona horaria IANA. Si se omite se usa America/Denver. (1 a 64 caracteres) |
-| `admin` | objeto | sí | El admin de la nueva empresa. Recibe una contraseña temporal. |
+| `admin` | objeto | sí | El admin de la nueva empresa. Recibe un correo para crear su contraseña. |
 | `admin.email` | texto | sí | (ej. `"ana@empresa.com"`) |
 | `admin.firstName` | texto | sí | (1 a 100 caracteres; ej. `"Juan"`) |
 | `admin.lastName` | texto | sí | (1 a 100 caracteres; ej. `"Pérez"`) |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
 
 <a id="schema-createworksiterequest"></a>
 #### CreateWorkSiteRequest
@@ -4278,8 +4376,10 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `employee` | [Employee](#schema-employee) | sí | — |
-| `temporaryPassword` | texto | sí | Se muestra UNA sola vez; entrégala de forma segura al empleado. |
-| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | — |
+| `delivery` | `email` \| `temporary_password` | sí | Cómo recibió su acceso. |
+| `emailSent` | booleano | sí | false si el correo no se pudo enviar: reenvíalo o dale una contraseña temporal. |
+| `temporaryPassword` | texto o null | sí | Solo con `temporary_password`. Se muestra UNA sola vez; entrégala de forma segura. |
+| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | Cuándo vence el enlace o la contraseña temporal (72 horas). |
 
 <a id="schema-healthreport"></a>
 #### HealthReport
@@ -4410,6 +4510,21 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | `clockInLocation` | [ClockLocation](#schema-clocklocation) o null | sí | Dónde estaba el empleado al marcar su entrada. null si la registró un admin o es anterior a este dato |
 | `clockInZone` | [ClockZone](#schema-clockzone) o null | sí | Si cayó dentro o fuera de una zona de trabajo al marcar. null si la empresa no tenía zonas o no hubo ubicación |
 | `corrected` | booleano | sí | true si un admin lo corrigió |
+
+<a id="schema-passwordresetconfirmation"></a>
+#### PasswordResetConfirmation
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `token` | texto | sí | El que llega en el enlace del correo. (32 a 256 caracteres) |
+| `newPassword` | texto | sí | Mínimo 12 caracteres; distinta del email. (0 a 128 caracteres) |
+
+<a id="schema-passwordresetrequest"></a>
+#### PasswordResetRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `email` | texto | sí | (ej. `"ana@empresa.com"`) |
 
 <a id="schema-payperiodstatus"></a>
 #### PayPeriodStatus
@@ -4662,14 +4777,23 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | --- | --- | --- | --- |
 | `refreshToken` | texto | sí | (32 a 256 caracteres) |
 
+<a id="schema-resetaccessrequest"></a>
+#### ResetAccessRequest
+
+| Campo | Tipo | Obligatorio | Descripción |
+| --- | --- | --- | --- |
+| `delivery` | `email` \| `temporary_password` | no | `email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: se genera una contraseña temporal para entregarla en persona. Si los correos no están configurados o el correo es de un dominio de pruebas, se usa la temporal. |
+
 <a id="schema-resetadminpasswordresponse"></a>
 #### ResetAdminPasswordResponse
 
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `admin` | [CompanyAdmin](#schema-companyadmin) | sí | — |
-| `temporaryPassword` | texto | sí | Se muestra UNA sola vez. |
-| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | — |
+| `delivery` | `email` \| `temporary_password` | sí | Cómo recibió su acceso. |
+| `emailSent` | booleano | sí | false si el correo no se pudo enviar: reenvíalo o dale una contraseña temporal. |
+| `temporaryPassword` | texto o null | sí | Solo con `temporary_password`. Se muestra UNA sola vez; entrégala de forma segura. |
+| `temporaryPasswordExpiresAt` | fecha y hora ISO 8601 | sí | Cuándo vence el enlace o la contraseña temporal (72 horas). |
 
 <a id="schema-savedailyreportrequest"></a>
 #### SaveDailyReportRequest
@@ -4704,6 +4828,7 @@ Además, **cualquier** endpoint puede responder `PAYLOAD_TOO_LARGE` (413), `UNSU
 | Campo | Tipo | Obligatorio | Descripción |
 | --- | --- | --- | --- |
 | `companyId` | texto (uuid) o null | sí | Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, para ver el resumen de todas tus empresas. |
+| `refreshToken` | texto | sí | El refresh token de la sesión actual: se reemplaza por el nuevo sin reiniciar la duración máxima de la sesión. (32 a 256 caracteres) |
 
 <a id="schema-timeentry"></a>
 #### TimeEntry

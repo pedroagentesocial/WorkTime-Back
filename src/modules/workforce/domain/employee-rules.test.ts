@@ -14,6 +14,10 @@ describe('EmployeeRules', () => {
         details: { maxEmployees: 5, activeEmployees: 5 },
       }),
     );
+    // Una empresa excedida por bajar de plan tampoco da de alta ni reactiva
+    expect(() => {
+      EmployeeRules.assertCanAddActiveEmployee(7, 5);
+    }).toThrow(expect.objectContaining({ code: 'EMPLOYEE_LIMIT_REACHED' }));
   });
 
   it('normaliza el teléfono: se recorta y vacío equivale a no tener', () => {

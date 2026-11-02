@@ -22,6 +22,12 @@ export const SECURITY = Object.freeze({
     maxAgeDays: 30,
   },
 
+  // Recuperar la contrasena por correo: enlace de un solo uso y un correo como maximo por minuto
+  passwordReset: {
+    ttlMinutes: 30,
+    resendCooldownSeconds: 60,
+  },
+
   login: {
     maxFailedAttempts: 3,
     // Bloqueo progresivo: 30 s y se duplica en cada reincidencia hasta el tope

@@ -1,6 +1,12 @@
 import { Permission } from '#shared/domain/permissions.js';
 import { created, defineRoute, ok, paginated, type AnyRoute } from '#shared/http/route.js';
-import { dataResponse, idParams, pageResponse } from '#shared/http/schemas.js';
+import {
+  dataResponse,
+  idParams,
+  pageResponse,
+  resetAccessBody,
+  toAccessDto,
+} from '#shared/http/schemas.js';
 import type { ChangeCompanyStatusUseCase } from '../application/change-company-status.use-case.js';
 import type { CreateCompanyUseCase } from '../application/create-company.use-case.js';
 import type { GetCompanyUseCase } from '../application/get-company.use-case.js';
@@ -56,8 +62,7 @@ export function platformRoutes(deps: Deps): AnyRoute[] {
         const result = await deps.createCompany.execute({ actor, client: request, ...body });
         return created({
           company: toCompanyDto(result.company),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),
@@ -101,7 +106,10 @@ export function platformRoutes(deps: Deps): AnyRoute[] {
       method: 'patch',
       path: '/platform/companies/:id',
       summary: 'Editar una empresa',
-      description: 'Solo se modifican los campos enviados.',
+      description:
+        'Solo se modifican los campos enviados. `maxEmployees` puede quedar por debajo de los ' +
+        'empleados activos (por ejemplo al bajar de plan): nadie pierde el acceso, pero la empresa ' +
+        'queda excedida y no puede dar de alta ni reactivar empleados hasta quedar dentro.',
       tags: TAGS,
       auth: AUTH,
       request: { params: idParams, body: updateCompanyBody },
@@ -112,10 +120,6 @@ export function platformRoutes(deps: Deps): AnyRoute[] {
           errorCodes: ['INVALID_TIMEZONE', 'INVALID_COMPANY_NAME', 'INVALID_MAX_EMPLOYEES'],
         },
         404: NOT_FOUND,
-        409: {
-          description: 'El límite es menor a los empleados activos',
-          errorCodes: ['MAX_EMPLOYEES_BELOW_ACTIVE'],
-        },
       },
       handler: async ({ actor, params, body, request }) =>
         ok(
@@ -166,7 +170,7 @@ export function platformRoutes(deps: Deps): AnyRoute[] {
         'del admin y desbloquea su cuenta.',
       tags: TAGS,
       auth: AUTH,
-      request: { params: idParams },
+      request: { params: idParams, body: resetAccessBody },
       responses: {
         200: {
           description: 'Contraseña restablecida',
@@ -177,16 +181,16 @@ export function platformRoutes(deps: Deps): AnyRoute[] {
           errorCodes: ['COMPANY_NOT_FOUND', 'COMPANY_ADMIN_NOT_FOUND'],
         },
       },
-      handler: async ({ actor, params, request }) => {
+      handler: async ({ actor, params, body, request }) => {
         const result = await deps.resetCompanyAdminPassword.execute({
           actor,
           client: request,
           companyId: params.id,
+          delivery: body?.delivery,
         });
         return ok({
           admin: toAdminDto(result.admin),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),

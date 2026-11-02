@@ -1,5 +1,11 @@
 import { MULTI_ADMIN_LIMITS } from '../domain/multi-admin-rules.js';
-import { emailSchema, paginationQuery, personNameSchema } from '#shared/http/schemas.js';
+import {
+  accessDeliveryInput,
+  accessResultShape,
+  emailSchema,
+  paginationQuery,
+  personNameSchema,
+} from '#shared/http/schemas.js';
 import { z } from '#shared/http/zod.js';
 import type { MultiAdminDetail } from '../application/get-multi-admin.use-case.js';
 import type { MultiAdminView } from '../application/ports/multi-admin.repository.js';
@@ -31,6 +37,7 @@ export const createMultiAdminBody = z
     lastName: personNameSchema.openapi({ example: 'Gómez' }),
     maxCompanies,
     maxEmployeesPerCompany,
+    delivery: accessDeliveryInput,
   })
   .strict()
   .openapi('CreateMultiAdminRequest');
@@ -93,10 +100,7 @@ export const multiAdminDetailSchema = z
 export const createMultiAdminResponse = z
   .object({
     multiAdmin: multiAdminSchema,
-    temporaryPassword: z.string().openapi({
-      description: 'Contraseña temporal. Se muestra UNA sola vez; entrégala de forma segura.',
-    }),
-    temporaryPasswordExpiresAt: z.iso.datetime(),
+    ...accessResultShape,
   })
   .openapi('CreateMultiAdminResponse');
 

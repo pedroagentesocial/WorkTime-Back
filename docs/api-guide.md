@@ -245,15 +245,33 @@ Cuando una petición responde `401` con `TOKEN_EXPIRED`, llama a `POST /auth/ref
 
 > Un access token **ya emitido** deja de servir al instante si el usuario cambia su contraseña, es desactivado, se le cierran todas las sesiones o su empresa se suspende. En cada petición el servidor lo verifica.
 
+### Acceso de una cuenta nueva o restablecida
+
+Al dar de alta a un empleado, una empresa con su admin o un admin multiempresa, y al restablecer la contraseña de alguien, la persona recibe su acceso de una de dos formas (campo `delivery` del cuerpo; sin él, por correo):
+
+- **`email`** (por defecto): le llega un correo con un enlace de un solo uso para crear su contraseña (`APP_URL/crear-contrasena?token=…` al darla de alta, `APP_URL/restablecer-contrasena?token=…` al restablecer). Vence a las **72 horas** y se confirma con `POST /auth/password-reset/confirm`. Nadie ve ninguna contraseña. Si el correo no sale, la respuesta trae `emailSent: false`: se reenvía con el botón de restablecer o se le da una temporal.
+- **`temporary_password`**: para quien no usa correo. Se usa también, sin pedirlo, si los correos no están configurados o el correo es de un dominio de pruebas (`.test`, `.example`…).
+
+La respuesta trae `delivery`, `emailSent`, `temporaryPassword` (solo con la temporal; `null` con correo) y `temporaryPasswordExpiresAt` (cuándo vence el enlace o la temporal). Restablecer, por cualquiera de las dos vías, deja sin servir la contraseña anterior y cierra sus sesiones.
+
 ### Contraseña temporal
 
-Cuando el admin da de alta a un empleado o restablece una contraseña, el sistema genera una **contraseña temporal** (se muestra **una sola vez**). Dura 72 horas.
+Cuando se elige la **contraseña temporal**, se muestra **una sola vez** y dura 72 horas.
 
 1. El usuario inicia sesión con ella. La respuesta trae `user.mustChangePassword: true`.
 2. Mientras tenga contraseña temporal, **solo puede** consultar `GET /auth/me`, cambiar la contraseña con `PATCH /auth/me/password` y cerrar sus sesiones. Cualquier otra ruta responde `403 PASSWORD_CHANGE_REQUIRED`.
 3. Al cambiarla, la respuesta trae una **sesión nueva** y las anteriores se cierran.
 
 Una contraseña nueva debe tener **al menos 12 caracteres** (máximo 128), ser distinta de la actual, no ser igual al email y no ser una contraseña trivial (un mismo carácter repetido, `123456789012`, `password1234`...). Si no cumple, responde `400 WEAK_PASSWORD` con los motivos en `error.details`.
+
+### Recuperar la contraseña por correo
+
+Quien olvidó su contraseña la recupera sin sesión:
+
+1. `POST /auth/password-reset` con su `email`. Si es de una cuenta con acceso, le llega un correo con un enlace a `APP_URL/restablecer-contrasena?token=…`. Responde **siempre `204`**, exista o no la cuenta, para no revelar qué correos están registrados. Manda como máximo un correo por minuto a la misma persona.
+2. `POST /auth/password-reset/confirm` con ese `token` y la `newPassword`. Pone la contraseña nueva, **cierra todas las sesiones** y quita el bloqueo por intentos. Después hay que iniciar sesión.
+
+El enlace sirve **una sola vez** y vence a los **30 minutos**; pedir otro anula el anterior. Un enlace usado, vencido o inventado responde `400 INVALID_RESET_TOKEN`. El admin global no se recupera por aquí, solo desde la terminal del servidor (`npm run admin:recover`), ni las cuentas desactivadas o de una empresa suspendida. Los correos salen por Resend con `RESEND_API_KEY`, `EMAIL_FROM` y `APP_URL` del `.env` (sin ellas la API funciona y no envía correos) y nunca a dominios reservados para pruebas (`.test`, `.example`, `.invalid`, `.localhost`).
 
 ### Bloqueo por intentos fallidos
 
@@ -359,7 +377,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 **Aislamiento entre empresas.** La empresa **sale siempre del token**, nunca de lo que mande el cliente. Un recurso de otra empresa responde `404`, igual que uno que no existe.
 
-**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una y recibe una sesión nueva cuya empresa activa es esa. Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
+**Admin multiempresa.** No tiene empresa propia: su acceso son las empresas que tiene asignadas. Al iniciar sesión **no tiene empresa activa**; con `POST /auth/active-company` elige una mandando también el `refreshToken` de su sesión actual, que se cambia por un par nuevo cuya empresa activa es esa (el refresh token enviado queda anulado y la sesión conserva su duración máxima de 30 días; un token ajeno, ya usado o vencido responde `401 INVALID_REFRESH_TOKEN`). Desde ahí todo funciona como para un admin de esa empresa y solo ve sus datos. Con `companyId: null` vuelve a quedar sin empresa activa. Si le quitan la empresa o la suspenden, su sesión en ella deja de servir de inmediato (`SESSION_REVOKED` o `COMPANY_SUSPENDED`) y no se puede renovar. Sin empresa activa, las rutas de empresa responden `403 COMPANY_REQUIRED`.
 
 ---
 
@@ -393,7 +411,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 - El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), con un último día opcional (`selfEditUntil`). Sin fecha, dura hasta que lo quite.
 - Con el permiso, `PATCH /me/time-entries/{id}` cambia la entrada o la salida de un marcaje suyo, también para poner la salida que olvidó un día anterior. El motivo es obligatorio.
-- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
+- Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`; una entrada abierta de un día anterior se mide hasta ahora, y un marcaje con horas extra autorizadas por el admin no se puede alargar). Un marcaje corregido por el empleado no dura más de 24 horas aunque no haya límite diario (`409 SELF_EDIT_TOO_LONG`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
 - `GET /me/clock-status` trae `selfEdit` (días y vencimiento; `null` si hoy no puede). Cada cambio queda en el historial del marcaje y en la actividad del admin como `time_entry.corrected_by_employee`, que nunca se purga.
 
 ### Correcciones, registros manuales y anulaciones (admin)
@@ -579,7 +597,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 - `POST /platform/companies` crea una empresa **junto con su admin**. Devuelve la empresa (con su código) y la **contraseña temporal del admin, una sola vez**.
 - `GET /platform/companies` lista las empresas. Con `search` busca por nombre, código o prefijo.
-- `GET` y `PATCH /platform/companies/{id}` ven y editan una empresa (nombre, zona y límite de empleados).
+- `GET` y `PATCH /platform/companies/{id}` ven y editan una empresa (nombre, zona y límite de empleados). El límite puede quedar por debajo de los empleados activos, por ejemplo al bajar de plan: nadie pierde el acceso ni sus horas, pero la empresa queda **excedida** y no puede dar de alta ni reactivar empleados (`409 EMPLOYEE_LIMIT_REACHED`) hasta que su admin desactive a los que sobran. El cambio se audita con el límite anterior, el nuevo y los activos.
 - `PATCH /platform/companies/{id}/status` suspende o activa una empresa: al suspenderla, **nadie** de esa empresa puede usar el sistema.
 - `POST /platform/companies/{id}/admin/reset-password` genera una contraseña temporal para el admin de la empresa.
 

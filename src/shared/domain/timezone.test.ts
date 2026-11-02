@@ -17,12 +17,18 @@ describe('isValidTimezone', () => {
     },
   );
 
-  it.each(['', 'Mexico', 'America/Inventada', '-06:00', 'UTC; DROP TABLE', 'x'.repeat(65)])(
-    'rechaza "%s"',
-    (tz) => {
-      expect(isValidTimezone(tz)).toBe(false);
-    },
-  );
+  it.each([
+    '',
+    'Mexico',
+    'America/Inventada',
+    '-06:00',
+    '-06',
+    '+0530',
+    'UTC; DROP TABLE',
+    'x'.repeat(65),
+  ])('rechaza "%s"', (tz) => {
+    expect(isValidTimezone(tz)).toBe(false);
+  });
 });
 
 describe('resolveTimezone', () => {

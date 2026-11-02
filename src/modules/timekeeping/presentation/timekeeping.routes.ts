@@ -416,6 +416,7 @@ export function timekeepingRoutes(deps: Deps): AnyRoute[] {
             'SELF_EDIT_OUT_OF_RANGE',
             'SELF_EDIT_OPEN_TODAY',
             'SELF_EDIT_OVER_LIMIT',
+            'SELF_EDIT_TOO_LONG',
             'TIME_ENTRY_OVERLAP',
             'TIME_ENTRY_CHANGED',
             'TIME_ENTRY_VOIDED',

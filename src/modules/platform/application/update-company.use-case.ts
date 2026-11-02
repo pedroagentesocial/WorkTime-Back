@@ -42,19 +42,27 @@ export class UpdateCompanyUseCase implements UseCase<UpdateCompanyInput, Company
     if (maxEmployees !== undefined) CompanyRules.assertMaxEmployees(maxEmployees);
 
     await this.deps.transactions.run(async () => {
-      if (maxEmployees !== undefined) {
-        const activeEmployees = await companies.lockActiveEmployees(companyId);
-        if (activeEmployees === null) throw PlatformErrors.companyNotFound();
-        CompanyRules.assertLimitCoversActiveEmployees(maxEmployees, activeEmployees);
+      // El limite puede quedar por debajo de los activos, por ejemplo al bajar de plan: nadie pierde
+      // el acceso ni sus horas, pero la empresa no da de alta ni reactiva hasta quedar dentro
+      const activeEmployees =
+        maxEmployees === undefined ? null : await companies.lockActiveEmployees(companyId);
+      if (maxEmployees !== undefined && activeEmployees === null) {
+        throw PlatformErrors.companyNotFound();
       }
       await companies.update(companyId, changes);
-    });
-    await this.deps.securityEvents.record({
-      type: SecurityEventType.COMPANY_UPDATED,
-      userId: actor.userId,
-      companyId,
-      client,
-      metadata: { fields: Object.keys(changes) },
+      await this.deps.securityEvents.recordOrThrow({
+        type: SecurityEventType.COMPANY_UPDATED,
+        userId: actor.userId,
+        companyId,
+        client,
+        metadata: {
+          fields: Object.keys(changes),
+          ...(maxEmployees !== undefined && {
+            maxEmployees: { from: current.maxEmployees, to: maxEmployees },
+            activeEmployees,
+          }),
+        },
+      });
     });
 
     const updated = await companies.findById(companyId);

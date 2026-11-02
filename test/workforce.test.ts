@@ -30,6 +30,8 @@ const newEmployee = (overrides: Record<string, unknown> = {}) => ({
   email: `${uuidv7()}@empresa.com`,
   firstName: 'Ana',
   lastName: 'López',
+  // Estos tests entran con la contrasena temporal; el correo se prueba en test/account-access.test.ts
+  delivery: 'temporary_password',
   ...overrides,
 });
 
@@ -300,6 +302,36 @@ describe('PATCH /company/employees/:id', () => {
     });
   });
 
+  it('los cambios que afectan el pago quedan auditados con el valor anterior y el nuevo', async () => {
+    const { app } = createTestApp();
+    const { auth, company } = await companyAdminSession(app);
+    const { employee } = await createEmployeeVia(app, auth);
+
+    await request(app)
+      .patch(api(`/company/employees/${employee.id}`))
+      .set(auth)
+      .send({ dailyLimitMinutes: 600, allowSelfEdit: true, lastName: 'Pérez' })
+      .expect(200);
+    await request(app).patch(api('/company')).set(auth).send({ selfEditDays: 3 }).expect(200);
+
+    const events = await prisma.securityEvent.findMany({
+      where: {
+        companyId: company.id,
+        type: { in: ['employee.updated', 'company.settings_updated'] },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(events.map((event) => event.metadata)).toMatchObject([
+      {
+        payChanges: {
+          dailyLimitMinutes: { from: null, to: 600 },
+          allowSelfEdit: { from: false, to: true },
+        },
+      },
+      { payChanges: { selfEditDays: { from: 7, to: 3 } } },
+    ]);
+  });
+
   it('no permite cambiar el email ni el estado por aquí', async () => {
     const { app } = createTestApp();
     const { auth } = await companyAdminSession(app);
@@ -398,6 +430,7 @@ describe('POST /company/employees/:id/reset-password', () => {
     const res = await request(app)
       .post(api(`/company/employees/${employee.id}/reset-password`))
       .set(auth)
+      .send({ delivery: 'temporary_password' })
       .expect(200);
     const second = res.body.data.temporaryPassword as string;
     expect(second).not.toBe(first);

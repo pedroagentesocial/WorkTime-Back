@@ -57,6 +57,18 @@ export class ChangeEmployeeStatusUseCase implements UseCase<
     if (current.status === status) return current;
     const today = localDateOf(this.deps.clock.now(), current.effectiveTimezone);
     const day = effectiveOn ?? today;
+    // El dia elegido cambia lo que se paga de sueldo fijo: si no queda constancia no se hace
+    const audit = () =>
+      this.deps.securityEvents.recordOrThrow({
+        type:
+          status === 'active'
+            ? SecurityEventType.EMPLOYEE_REACTIVATED
+            : SecurityEventType.EMPLOYEE_DEACTIVATED,
+        userId: actor.userId,
+        companyId,
+        client,
+        metadata: { employeeId, targetUserId: current.userId, effectiveOn: day },
+      });
 
     if (status === 'active') {
       await this.deps.transactions.run(async () => {
@@ -72,6 +84,7 @@ export class ChangeEmployeeStatusUseCase implements UseCase<
         if (plan.action === 'remove') await spans.remove(companyId, employeeId, plan.fromDay);
         if (plan.action === 'end') await spans.end(companyId, employeeId, plan.fromDay, plan.toDay);
         await employees.setStatus(companyId, employeeId, 'active');
+        await audit();
       });
     } else {
       await this.deps.transactions.run(async () => {
@@ -83,6 +96,7 @@ export class ChangeEmployeeStatusUseCase implements UseCase<
         });
         await spans.start(companyId, employeeId, plan.startFrom);
         await employees.setStatus(companyId, employeeId, 'inactive');
+        await audit();
       });
       const event: EmployeeDeactivated = {
         name: WorkforceEvents.EMPLOYEE_DEACTIVATED,
@@ -91,17 +105,6 @@ export class ChangeEmployeeStatusUseCase implements UseCase<
       };
       await this.deps.eventBus.publish(event);
     }
-
-    await this.deps.securityEvents.record({
-      type:
-        status === 'active'
-          ? SecurityEventType.EMPLOYEE_REACTIVATED
-          : SecurityEventType.EMPLOYEE_DEACTIVATED,
-      userId: actor.userId,
-      companyId,
-      client,
-      metadata: { employeeId, targetUserId: current.userId, effectiveOn: day },
-    });
 
     const updated = await employees.findById(companyId, employeeId);
     if (!updated) throw WorkforceErrors.employeeNotFound();

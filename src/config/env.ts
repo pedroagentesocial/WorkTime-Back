@@ -65,8 +65,20 @@ const envSchema = z
       ),
     JWT_ACCESS_TTL: durationBetween('5m', '1h').default(parseDuration('15m')),
     REFRESH_TOKEN_TTL: durationBetween('1d', '30d').default(parseDuration('7d')),
+    // Correos con Resend: opcionales; sin ellos la API funciona y no envia correos
+    RESEND_API_KEY: z.string().trim().min(1).optional(),
+    EMAIL_FROM: z.string().trim().min(3).optional(),
+    APP_URL: z.url({ message: 'Debe ser una URL válida' }).optional(),
   })
   .superRefine((value, ctx) => {
+    const email = [value.RESEND_API_KEY, value.EMAIL_FROM, value.APP_URL];
+    if (email.some(Boolean) && !email.every(Boolean)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['RESEND_API_KEY'],
+        message: 'Para enviar correos define juntas RESEND_API_KEY, EMAIL_FROM y APP_URL',
+      });
+    }
     if (value.NODE_ENV === 'production' && value.CORS_ORIGINS.includes('*')) {
       ctx.addIssue({
         code: 'custom',
@@ -89,6 +101,12 @@ export interface Env {
     readonly accessTtlMs: number;
   };
   readonly refreshTokenTtlMs: number;
+  // null si no se configuro Resend: los correos se omiten
+  readonly email: {
+    readonly resendApiKey: string;
+    readonly from: string;
+    readonly appUrl: string;
+  } | null;
 }
 
 export class EnvValidationError extends Error {
@@ -116,6 +134,14 @@ export function parseEnv(source: Record<string, string | undefined>): Env {
     databaseUrl: v.DATABASE_URL,
     jwt: Object.freeze({ secret: v.JWT_SECRET, accessTtlMs: v.JWT_ACCESS_TTL }),
     refreshTokenTtlMs: v.REFRESH_TOKEN_TTL,
+    email:
+      v.RESEND_API_KEY && v.EMAIL_FROM && v.APP_URL
+        ? Object.freeze({
+            resendApiKey: v.RESEND_API_KEY,
+            from: v.EMAIL_FROM,
+            appUrl: v.APP_URL.replace(/\/+$/, ''),
+          })
+        : null,
   });
 }
 

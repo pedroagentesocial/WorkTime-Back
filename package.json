@@ -68,7 +68,7 @@
     "pino-http": "11.0.0",
     "swagger-ui-express": "5.0.1",
     "uuid": "14.0.2",
-    "zod": "4.6.5"
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -78,7 +78,7 @@
     "@types/pg": "8.23.1",
     "@types/supertest": "7.2.1",
     "@types/swagger-ui-express": "4.1.8",
-    "@vitest/coverage-v8": "5.0.2",
+    "@vitest/coverage-v8": "5.0.5",
     "eslint": "10.11.0",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-security": "4.1.0",
@@ -90,7 +90,7 @@
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.0",
-    "vitest": "5.0.2"
+    "vitest": "5.0.5"
   },
   "overrides": {
     "deepmerge-ts": "8.0.2",

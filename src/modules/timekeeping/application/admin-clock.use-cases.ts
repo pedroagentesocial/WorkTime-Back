@@ -133,7 +133,7 @@ export class AdminClockOutUseCase implements UseCase<AdminClockOutInput, TimeEnt
     await this.deps.transactions.run(async () => {
       if (!(await closeIfOverLimit(entries, open, profile.dailyLimitMinutes, now))) {
         open.close(now, 'admin');
-        if (!(await entries.closeIfOpen(open.companyId, open.id, now, 'admin'))) {
+        if (!(await entries.closeIfOpen(open.companyId, open.id, now, 'admin', open.clockInAt))) {
           throw TimekeepingErrors.employeeNotClockedIn();
         }
       }

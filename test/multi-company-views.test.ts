@@ -154,7 +154,7 @@ describe('GET /portfolio/summary', () => {
       }[]
     ).find((c) => c.company.id === alfa.id)!;
 
-    const inAlfa = bearer((await switchCompany(app, session.accessToken, alfa.id)).accessToken);
+    const inAlfa = bearer((await switchCompany(app, session, alfa.id)).accessToken);
     const own = (await get(app, inAlfa, '/company/attendance/summary').expect(200)).body.data;
     expect(alfaRow.employees).toEqual(own.employees);
     expect(alfaRow.worked).toEqual(own.worked);
@@ -206,7 +206,7 @@ describe('GET /portfolio/summary', () => {
 
   it('funciona igual con una empresa activa en la sesión', async () => {
     const { app, alfa, session } = await setup();
-    const inAlfa = bearer((await switchCompany(app, session.accessToken, alfa.id)).accessToken);
+    const inAlfa = bearer((await switchCompany(app, session, alfa.id)).accessToken);
 
     const res = await get(app, inAlfa, '/portfolio/summary').expect(200);
     expect(res.body.data.totals.companies).toBe(2);

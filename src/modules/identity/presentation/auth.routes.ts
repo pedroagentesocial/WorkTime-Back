@@ -7,13 +7,19 @@ import type { LoginUseCase } from '../application/login.use-case.js';
 import type { LogoutAllUseCase, UpdateProfileUseCase } from '../application/profile.use-cases.js';
 import type { LogoutUseCase } from '../application/logout.use-case.js';
 import type { RefreshSessionUseCase } from '../application/refresh-session.use-case.js';
+import type {
+  ConfirmPasswordResetUseCase,
+  RequestPasswordResetUseCase,
+} from '../application/password-reset.use-cases.js';
 import type { SwitchActiveCompanyUseCase } from '../application/switch-active-company.use-case.js';
 import {
   changePasswordBody,
+  confirmPasswordResetBody,
   loginBody,
   loginResponseSchema,
   profileSchema,
   refreshBody,
+  requestPasswordResetBody,
   updateProfileBody,
   sessionSchema,
   switchCompanyBody,
@@ -29,6 +35,8 @@ interface Deps {
   updateProfile: UpdateProfileUseCase;
   logoutAll: LogoutAllUseCase;
   switchActiveCompany: SwitchActiveCompanyUseCase;
+  requestPasswordReset: RequestPasswordResetUseCase;
+  confirmPasswordReset: ConfirmPasswordResetUseCase;
 }
 
 const TAGS = ['Autenticación'];
@@ -136,15 +144,21 @@ export function authRoutes(deps: Deps): AnyRoute[] {
       path: '/auth/active-company',
       summary: 'Elegir la empresa con la que trabajo',
       description:
-        'Solo para el admin multiempresa. Emite una sesión nueva cuya empresa activa es la elegida; ' +
-        'desde ahí se trabaja como admin de esa empresa. Con `companyId: null` la sesión queda ' +
-        'sin empresa activa. Las sesiones anteriores siguen válidas hasta cerrarlas.',
+        'Solo para el admin multiempresa. Cambia el refresh token de la sesión actual por un par ' +
+        'nuevo cuya empresa activa es la elegida; desde ahí se trabaja como admin de esa empresa. ' +
+        'Con `companyId: null` la sesión queda sin empresa activa. El refresh token enviado queda ' +
+        'anulado y la sesión conserva su duración máxima de 30 días.',
       tags: TAGS,
       auth: Permission.PORTFOLIO_READ,
       rateLimit: 'sensitive',
       request: { body: switchCompanyBody },
       responses: {
         200: { description: 'Sesión nueva', schema: dataResponse(loginResponseSchema) },
+        401: {
+          description:
+            'El refresh token no es de esta sesión, ya se usó o la sesión llegó a su máximo',
+          errorCodes: ['INVALID_REFRESH_TOKEN', 'SESSION_MAX_AGE_REACHED'],
+        },
         403: {
           description: 'La empresa está suspendida',
           errorCodes: ['COMPANY_SUSPENDED'],
@@ -159,6 +173,7 @@ export function authRoutes(deps: Deps): AnyRoute[] {
           actor,
           client: request,
           companyId: body.companyId,
+          refreshToken: body.refreshToken,
         });
         return ok({ ...toSessionDto(session), user: toProfile(account) });
       },
@@ -207,6 +222,50 @@ export function authRoutes(deps: Deps): AnyRoute[] {
       },
       handler: async ({ actor, body, request }) =>
         ok(toSessionDto(await deps.changePassword.execute({ actor, ...body, client: request }))),
+    }),
+
+    defineRoute({
+      method: 'post',
+      path: '/auth/password-reset',
+      summary: 'Pedir un enlace para restablecer la contraseña',
+      description:
+        'Si el correo es de una cuenta con acceso, le envía un enlace de un solo uso que vence en ' +
+        '30 minutos (como máximo uno por minuto). Responde igual exista o no la cuenta, para no ' +
+        'revelar qué correos están registrados. El admin global no se recupera por aquí, solo ' +
+        'desde la terminal del servidor.',
+      tags: TAGS,
+      auth: 'public',
+      rateLimit: 'sensitive',
+      request: { body: requestPasswordResetBody },
+      responses: { 204: { description: 'Si la cuenta existe, se envió el correo' } },
+      handler: async ({ body, request }) => {
+        await deps.requestPasswordReset.execute({ email: body.email, client: request });
+        return noContent();
+      },
+    }),
+
+    defineRoute({
+      method: 'post',
+      path: '/auth/password-reset/confirm',
+      summary: 'Restablecer la contraseña con el enlace del correo',
+      description:
+        'Pone la contraseña nueva, cierra todas las sesiones y quita el bloqueo por intentos. ' +
+        'El enlace queda usado. Después hay que iniciar sesión.',
+      tags: TAGS,
+      auth: 'public',
+      rateLimit: 'sensitive',
+      request: { body: confirmPasswordResetBody },
+      responses: {
+        204: { description: 'Contraseña restablecida' },
+        400: {
+          description: 'Enlace inválido, usado o vencido, o contraseña débil',
+          errorCodes: ['INVALID_RESET_TOKEN', 'WEAK_PASSWORD'],
+        },
+      },
+      handler: async ({ body, request }) => {
+        await deps.confirmPasswordReset.execute({ ...body, client: request });
+        return noContent();
+      },
     }),
   ];
 }

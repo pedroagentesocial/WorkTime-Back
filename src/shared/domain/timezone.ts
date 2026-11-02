@@ -1,6 +1,9 @@
 // Todo instante se guarda en UTC; se usan zonas IANA, nunca desfases fijos
 export function isValidTimezone(value: string): boolean {
-  if (value.length === 0 || value.length > 64 || !/^[A-Za-z0-9_+/-]+$/.test(value)) return false;
+  // Empieza con letra: Intl tambien acepta desfases fijos como -06 o +0530, que no siguen el horario de verano
+  if (value.length === 0 || value.length > 64 || !/^[A-Za-z][A-Za-z0-9_+/-]*$/.test(value)) {
+    return false;
+  }
   try {
     new Intl.DateTimeFormat('en-US', { timeZone: value });
     return true;

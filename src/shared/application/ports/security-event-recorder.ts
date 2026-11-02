@@ -14,6 +14,8 @@ export const SecurityEventType = {
   SESSIONS_REVOKED: 'sessions.revoked',
   EMPLOYEE_SESSIONS_REVOKED: 'employee.sessions_revoked',
   PASSWORD_CHANGE_FAILED: 'password.change_failed',
+  PASSWORD_RESET_REQUESTED: 'password.reset_requested',
+  PASSWORD_RESET_COMPLETED: 'password.reset_completed',
   TEMPORARY_PASSWORD_ISSUED: 'password.temporary_issued',
   PLATFORM_ADMIN_RECOVERED: 'platform_admin.recovered',
   COMPANY_CREATED: 'company.created',

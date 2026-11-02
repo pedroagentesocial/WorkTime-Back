@@ -1,3 +1,4 @@
+import { ACCESS_DELIVERIES, type AccessResult } from '#shared/application/account-access.js';
 import { PAGINATION_DEFAULTS } from '#shared/application/pagination.js';
 import { z } from './zod.js';
 
@@ -44,3 +45,44 @@ export const personNameSchema = z
   .min(1, 'Es obligatorio')
   .max(100)
   .refine((value) => !/\p{Cc}/u.test(value), 'Contiene caracteres no permitidos');
+
+// Como recibe su acceso una cuenta nueva o restablecida; sin elegir, por correo si se puede
+export const accessDeliveryInput = z
+  .enum(ACCESS_DELIVERIES)
+  .optional()
+  .openapi({
+    description:
+      '`email` (por defecto): le llega un enlace para crear su contraseña. `temporary_password`: ' +
+      'se genera una contraseña temporal para entregarla en persona. Si los correos no están ' +
+      'configurados o el correo es de un dominio de pruebas, se usa la temporal.',
+  });
+
+// Cuerpo opcional de los botones de restablecer la contraseña
+export const resetAccessBody = z
+  .object({ delivery: accessDeliveryInput })
+  .strict()
+  .optional()
+  .openapi('ResetAccessRequest');
+
+export const accessResultShape = {
+  delivery: z.enum(ACCESS_DELIVERIES).openapi({ description: 'Cómo recibió su acceso.' }),
+  emailSent: z.boolean().openapi({
+    description: 'false si el correo no se pudo enviar: reenvíalo o dale una contraseña temporal.',
+  }),
+  temporaryPassword: z.string().or(z.null()).openapi({
+    description:
+      'Solo con `temporary_password`. Se muestra UNA sola vez; entrégala de forma segura.',
+  }),
+  temporaryPasswordExpiresAt: z.iso.datetime().openapi({
+    description: 'Cuándo vence el enlace o la contraseña temporal (72 horas).',
+  }),
+};
+
+export function toAccessDto(access: AccessResult) {
+  return {
+    delivery: access.delivery,
+    emailSent: access.emailSent,
+    temporaryPassword: access.temporaryPassword,
+    temporaryPasswordExpiresAt: access.expiresAt.toISOString(),
+  };
+}

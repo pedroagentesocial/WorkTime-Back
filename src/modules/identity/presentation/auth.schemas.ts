@@ -33,6 +33,28 @@ export const changePasswordBody = z
   .strict()
   .openapi('ChangePasswordRequest');
 
+export const requestPasswordResetBody = z
+  .object({ email: emailInput })
+  .strict()
+  .openapi('PasswordResetRequest');
+
+export const confirmPasswordResetBody = z
+  .object({
+    token: z
+      .string()
+      .min(32)
+      .max(256)
+      .openapi({ description: 'El que llega en el enlace del correo.' }),
+    newPassword: z
+      .string()
+      .max(SECURITY.password.maxLength)
+      .openapi({
+        description: `Mínimo ${SECURITY.password.minLength} caracteres; distinta del email.`,
+      }),
+  })
+  .strict()
+  .openapi('PasswordResetConfirmation');
+
 export const updateProfileBody = z
   .object({ firstName: personNameSchema, lastName: personNameSchema })
   .strict()
@@ -48,6 +70,11 @@ export const switchCompanyBody = z
           'Empresa con la que quieres trabajar. null deja la sesión sin empresa activa, ' +
           'para ver el resumen de todas tus empresas.',
       }),
+    refreshToken: refreshTokenInput.openapi({
+      description:
+        'El refresh token de la sesión actual: se reemplaza por el nuevo sin reiniciar la duración ' +
+        'máxima de la sesión.',
+    }),
   })
   .strict()
   .openapi('SwitchCompanyRequest');

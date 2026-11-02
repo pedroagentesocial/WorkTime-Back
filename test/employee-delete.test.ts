@@ -28,7 +28,12 @@ async function createEmployeeVia(app: Express, auth: Record<string, string>, ema
   const res = await request(app)
     .post(api('/company/employees'))
     .set(auth)
-    .send({ email: email ?? `${uuidv7()}@empresa.com`, firstName: 'Ana', lastName: 'López' });
+    .send({
+      email: email ?? `${uuidv7()}@empresa.com`,
+      firstName: 'Ana',
+      lastName: 'López',
+      delivery: 'temporary_password',
+    });
   if (res.status !== 201)
     throw new Error(`alta falló (${res.status}): ${JSON.stringify(res.body)}`);
   return res.body.data as {

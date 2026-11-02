@@ -23,6 +23,11 @@ export const KEPT_FOREVER_EVENT_TYPES: readonly string[] = [
   SecurityEventType.PAY_PERIOD_CLOSED,
   SecurityEventType.EMPLOYEE_PAY_RATE_CHANGED,
   SecurityEventType.EMPLOYEE_PAY_RATE_REMOVED,
+  // Cambian lo que se paga: altas y bajas con su dia, limites, permisos de correccion y moneda
+  SecurityEventType.EMPLOYEE_DEACTIVATED,
+  SecurityEventType.EMPLOYEE_REACTIVATED,
+  SecurityEventType.EMPLOYEE_UPDATED,
+  SecurityEventType.COMPANY_SETTINGS_UPDATED,
 ];
 
 export interface PurgeResult {

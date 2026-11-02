@@ -6,7 +6,12 @@ import {
   SecurityEventType,
   type SecurityEventRecorder,
 } from '#shared/application/ports/security-event-recorder.js';
-import type { TemporaryPasswordIssuer } from '#shared/application/temporary-password-issuer.js';
+import type {
+  AccessDelivery,
+  AccessResult,
+  AccountAccess,
+  PreparedAccess,
+} from '#shared/application/account-access.js';
 import type { UseCase } from '#shared/application/use-case.js';
 import { COMPANY_DEFAULTS, CompanyRules } from '#shared/domain/company-rules.js';
 import { AppError } from '#shared/domain/errors.js';
@@ -23,17 +28,24 @@ export interface CreateCompanyInput {
   // Dentro de una transaccion un choque de codigo la aborta: quien llama reintenta con intentos en 1
   readonly identifierAttempts?: number | undefined;
   readonly admin: { readonly email: string; readonly firstName: string; readonly lastName: string };
+  readonly delivery?: AccessDelivery | undefined;
 }
 
 export interface CreateCompanyOutput {
   readonly company: CompanyView;
-  readonly temporaryPassword: string;
-  readonly temporaryPasswordExpiresAt: Date;
+  readonly access: AccessResult;
+}
+
+// Empresa creada cuyo acceso aun no se entrega: el correo sale despues de la transaccion
+export interface CreatedCompany {
+  readonly company: CompanyView;
+  readonly admin: { readonly email: string; readonly firstName: string };
+  readonly access: PreparedAccess;
 }
 
 interface Deps {
   companyRepository: CompanyRepository;
-  temporaryPasswords: TemporaryPasswordIssuer;
+  accountAccess: AccountAccess;
   idGenerator: IdGenerator;
   secureRandom: SecureRandom;
   securityEvents: SecurityEventRecorder;
@@ -46,6 +58,14 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
   constructor(private readonly deps: Deps) {}
 
   async execute(input: CreateCompanyInput): Promise<CreateCompanyOutput> {
+    const created = await this.create(input);
+    return {
+      company: created.company,
+      access: await this.deps.accountAccess.deliver(created.admin, created.access, 'welcome'),
+    };
+  }
+
+  async create(input: CreateCompanyInput): Promise<CreatedCompany> {
     const { companyRepository: companies, idGenerator } = this.deps;
 
     const name = CompanyRules.normalizeName(input.name);
@@ -56,7 +76,7 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
 
     if (await companies.emailExists(email)) throw PlatformErrors.emailTaken();
 
-    const temporary = await this.deps.temporaryPasswords.issue();
+    const access = await this.deps.accountAccess.prepare(email, input.delivery);
     const companyId = idGenerator.generate();
     const adminId = idGenerator.generate();
 
@@ -78,8 +98,8 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
             email,
             firstName: input.admin.firstName.trim(),
             lastName: input.admin.lastName.trim(),
-            passwordHash: temporary.passwordHash,
-            temporaryPasswordExpiresAt: temporary.expiresAt,
+            passwordHash: access.passwordHash,
+            temporaryPasswordExpiresAt: access.expiresAt,
           },
         });
         break;
@@ -88,22 +108,19 @@ export class CreateCompanyUseCase implements UseCase<CreateCompanyInput, CreateC
         if (!taken || attempt >= maxAttempts) throw error;
       }
     }
+    await this.deps.accountAccess.saveLink(adminId, access);
 
     await this.deps.securityEvents.record({
       type: SecurityEventType.COMPANY_CREATED,
       userId: input.actor.userId,
       companyId,
       client: input.client,
-      metadata: { adminId },
+      metadata: { adminId, delivery: access.delivery },
     });
 
     const company = await companies.findById(companyId);
     if (!company) throw PlatformErrors.companyNotFound();
 
-    return {
-      company,
-      temporaryPassword: temporary.password,
-      temporaryPasswordExpiresAt: temporary.expiresAt,
-    };
+    return { company, admin: { email, firstName: input.admin.firstName.trim() }, access };
   }
 }

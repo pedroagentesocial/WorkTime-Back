@@ -28,7 +28,8 @@ export class CloseEntriesOfInactiveEmployeesUseCase implements UseCase<void, num
           const open = await entries.findOpenByEmployee(candidate.employeeId);
           if (open?.id !== candidate.id) return;
           const closeAt = now < open.clockInAt ? open.clockInAt : now;
-          if (await entries.closeIfOpen(open.companyId, open.id, closeAt, 'admin')) closed += 1;
+          if (await entries.closeIfOpen(open.companyId, open.id, closeAt, 'admin', open.clockInAt))
+            closed += 1;
         });
       } catch (err) {
         this.deps.logger.error(

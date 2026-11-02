@@ -1,6 +1,6 @@
 import { Permission } from '#shared/domain/permissions.js';
 import { created, defineRoute, ok, type AnyRoute } from '#shared/http/route.js';
-import { dataResponse } from '#shared/http/schemas.js';
+import { dataResponse, toAccessDto } from '#shared/http/schemas.js';
 import type { CreateOwnCompanyUseCase } from '../application/create-own-company.use-case.js';
 import type { ListMyCompaniesUseCase } from '../application/list-my-companies.use-case.js';
 import { createOwnCompanyBody, myCompaniesSchema, toMyCompaniesDto } from './portfolio.schemas.js';
@@ -55,8 +55,7 @@ export function portfolioRoutes(deps: Deps): AnyRoute[] {
         const result = await deps.createOwnCompany.execute({ actor, client: request, ...body });
         return created({
           company: toCompanyDto(result.company),
-          temporaryPassword: result.temporaryPassword,
-          temporaryPasswordExpiresAt: result.temporaryPasswordExpiresAt.toISOString(),
+          ...toAccessDto(result.access),
         });
       },
     }),
