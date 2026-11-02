@@ -228,9 +228,9 @@ model Employee {
   dailyLimitMinutes Int?      @map("daily_limit_minutes")
   /// Check-in propio: null hereda el de la empresa, true lo permite y false lo prohibe
   allowCheckIns     Boolean?  @map("allow_check_ins")
-  /// Permiso del admin para que corrija sus propias horas; selfEditUntil es el ultimo dia, null sin vencimiento
+  /// Permiso del admin para que corrija sus propias horas; selfEditUntil es el instante en que vence, null sin vencimiento
   allowSelfEdit     Boolean   @default(false) @map("allow_self_edit")
-  selfEditUntil     DateTime? @map("self_edit_until") @db.Date
+  selfEditUntil     DateTime? @map("self_edit_until") @db.Timestamptz(3)
   hiredAt           DateTime? @map("hired_at") @db.Date
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz(3)

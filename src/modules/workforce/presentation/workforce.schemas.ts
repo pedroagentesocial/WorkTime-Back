@@ -14,6 +14,7 @@ import type { CompanySettingsView } from '../application/ports/company-settings.
 import type { WorkSiteView } from '../application/ports/work-site.repository.js';
 import { WORK_SITE_LIMITS } from '../domain/work-site-rules.js';
 import type { EmployeeView } from '../application/ports/employee.repository.js';
+import { MAX_SELF_EDIT_MINUTES } from '../application/update-employee.use-case.js';
 import { EMPLOYEE_LIMITS } from '../domain/employee-rules.js';
 
 const timezone = z.string().trim().min(1).max(64);
@@ -275,10 +276,18 @@ export const updateEmployeeBody = z
       description:
         'Permite que el empleado corrija la hora de entrada o salida de sus marcajes de los últimos días (los que diga la empresa), con motivo. Nunca en un periodo cerrado.',
     }),
-    selfEditUntil: hiredAt.optional().openapi({
-      example: '2026-11-15',
-      description: 'Último día en que puede corregir; `null` = sin vencimiento.',
-    }),
+    selfEditMinutes: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_SELF_EDIT_MINUTES)
+      .nullable()
+      .optional()
+      .openapi({
+        example: 30,
+        description:
+          'Por cuántos minutos, desde ahora, puede corregir (hasta 365 días); `null` = sin vencimiento.',
+      }),
   })
   .strict()
   .refine((body) => Object.keys(body).length > 0, {
@@ -352,8 +361,8 @@ export const employeeSchema = z
     allowSelfEdit: z.boolean().openapi({
       description: 'Si el admin le permite corregir sus propias horas.',
     }),
-    selfEditUntil: z.iso.date().nullable().openapi({
-      description: 'Último día del permiso; null = sin vencimiento.',
+    selfEditUntil: z.iso.datetime().nullable().openapi({
+      description: 'Cuándo vence el permiso; null = sin vencimiento.',
     }),
     status: employeeStatus,
     mustChangePassword: z.boolean(),
@@ -374,6 +383,7 @@ export function toEmployeeDto(employee: EmployeeView) {
   return {
     ...employee,
     lastLoginAt: employee.lastLoginAt?.toISOString() ?? null,
+    selfEditUntil: employee.selfEditUntil?.toISOString() ?? null,
     createdAt: employee.createdAt.toISOString(),
     updatedAt: employee.updatedAt.toISOString(),
   };

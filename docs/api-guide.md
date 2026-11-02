@@ -409,7 +409,7 @@ Cada endpoint exige un **permiso**, no un rol. Cada rol tiene un conjunto de per
 
 ### Correcciones del propio empleado
 
-- El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), con un último día opcional (`selfEditUntil`). Sin fecha, dura hasta que lo quite.
+- El admin puede dejar que un empleado corrija **sus propias horas** (`allowSelfEdit` en `PATCH /company/employees/{id}`), por un tiempo opcional en minutos (`selfEditMinutes`, hasta 365 días): el servidor calcula con su hora cuándo vence y lo devuelve en `selfEditUntil`. Con `null` dura hasta que lo quite, y puede quitarlo antes con `allowSelfEdit: false`.
 - Con el permiso, `PATCH /me/time-entries/{id}` cambia la entrada o la salida de un marcaje suyo, también para poner la salida que olvidó un día anterior. El motivo es obligatorio.
 - Solo de los últimos días que elige la empresa (`selfEditDays` en `PATCH /company`, de 1 a 31, 7 por defecto) y nunca en un periodo cerrado (`409 SELF_EDIT_OUT_OF_RANGE`, `PERIOD_CLOSED`). La entrada abierta de hoy se termina con la salida (`409 SELF_EDIT_OPEN_TODAY`) y el cambio no puede pasar su límite diario (`409 SELF_EDIT_OVER_LIMIT`; una entrada abierta de un día anterior se mide hasta ahora, y un marcaje con horas extra autorizadas por el admin no se puede alargar). Un marcaje corregido por el empleado no dura más de 24 horas aunque no haya límite diario (`409 SELF_EDIT_TOO_LONG`). Sin permiso o vencido: `403 SELF_EDIT_NOT_ALLOWED`.
 - `GET /me/clock-status` trae `selfEdit` (días y vencimiento; `null` si hoy no puede). Cada cambio queda en el historial del marcaje y en la actividad del admin como `time_entry.corrected_by_employee`, que nunca se purga.
@@ -550,7 +550,7 @@ No hay actualizaciones en tiempo real por socket: **consulta cada 10 a 30 segund
 
 - `POST /company/employees` — alta. Devuelve el empleado y su **contraseña temporal (se muestra una sola vez)**. El código de empleado lo asigna el sistema.
 - `GET /company/employees` y `GET /company/employees/{id}` — listado (con `search` por nombre, email o código, y `status`) y detalle.
-- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria, límite diario propio y el permiso para corregir sus horas (`allowSelfEdit`, `selfEditUntil`).
+- `PATCH /company/employees/{id}` — nombre, teléfono, fecha de ingreso, zona horaria, límite diario propio y el permiso para corregir sus horas (`allowSelfEdit`, `selfEditMinutes`).
 - `PATCH /company/employees/{id}/status` — activar o desactivar; con `effectiveOn` se elige desde cuándo cuenta para el sueldo fijo (ver Bajas).
 - `DELETE /company/employees/{id}` — eliminar a un empleado sin historial (ver arriba).
 - `POST /company/employees/{id}/reset-password` — nueva contraseña temporal.

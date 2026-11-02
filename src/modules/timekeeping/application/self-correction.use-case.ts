@@ -26,9 +26,9 @@ export interface CorrectOwnTimeEntryInput {
 // Tope de un marcaje corregido por el propio empleado, decision del usuario; el admin no tiene tope
 export const MAX_SELF_EDIT_SECONDS = 24 * 60 * 60;
 
-export function selfEditActive(profile: EmployeeProfile, today: string): boolean {
+export function selfEditActive(profile: EmployeeProfile, now: Date): boolean {
   const { allowed, until } = profile.selfEdit;
-  return allowed && (until === null || today <= until);
+  return allowed && (until === null || now.getTime() < Date.parse(until));
 }
 
 // El empleado con permiso corrige la entrada o salida de un marcaje suyo reciente
@@ -46,7 +46,7 @@ export class CorrectOwnTimeEntryUseCase implements UseCase<
     if (!profile) throw TimekeepingErrors.employeeProfileNotFound();
     const now = this.deps.clock.now();
     const today = localDateOf(now, profile.effectiveTimezone);
-    if (!selfEditActive(profile, today)) throw TimekeepingErrors.selfEditNotAllowed();
+    if (!selfEditActive(profile, now)) throw TimekeepingErrors.selfEditNotAllowed();
     const days = profile.selfEdit.days;
     const earliest = addDays(today, -days);
 

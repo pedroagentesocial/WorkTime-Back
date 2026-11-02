@@ -199,15 +199,10 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
     const contains = filter.search
       ? { contains: filter.search, mode: 'insensitive' as const }
       : undefined;
+    const open = { clockOutAt: null, voidedAt: null };
     const where: Prisma.EmployeeWhereInput = {
       companyId,
       user: { status: 'active' },
-      ...(filter.status === 'in' && {
-        timeEntries: { some: { clockOutAt: null, voidedAt: null } },
-      }),
-      ...(filter.status === 'out' && {
-        timeEntries: { none: { clockOutAt: null, voidedAt: null } },
-      }),
       ...(contains && {
         OR: [
           { employeeCode: contains },
@@ -218,18 +213,43 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
       }),
     };
 
-    const [rows, total] = await Promise.all([
-      this.db.client.employee.findMany({
-        where,
-        select: ROSTER_SELECT,
-        orderBy: ROSTER_ORDER,
-        ...toOffset(page),
-      }),
-      this.db.client.employee.count({ where }),
-    ]);
+    const working: Prisma.EmployeeWhereInput = { ...where, timeEntries: { some: open } };
+    const away: Prisma.EmployeeWhereInput = { ...where, timeEntries: { none: open } };
+    const find = (scope: Prisma.EmployeeWhereInput, skip: number, take: number) =>
+      take > 0
+        ? this.db.client.employee.findMany({
+            where: scope,
+            select: ROSTER_SELECT,
+            orderBy: ROSTER_ORDER,
+            skip,
+            take,
+          })
+        : Promise.resolve([]);
 
-    const items = rows.map(toRosterEmployee);
-    return { items, page: page.page, limit: page.limit, total };
+    if (filter.status) {
+      const scope = filter.status === 'in' ? working : away;
+      const { skip, take } = toOffset(page);
+      const [rows, total] = await Promise.all([
+        find(scope, skip, take),
+        this.db.client.employee.count({ where: scope }),
+      ]);
+      return { items: rows.map(toRosterEmployee), page: page.page, limit: page.limit, total };
+    }
+
+    // Los que estan trabajando van primero y luego los de fuera, cada grupo por nombre
+    const [workingTotal, awayTotal] = await Promise.all([
+      this.db.client.employee.count({ where: working }),
+      this.db.client.employee.count({ where: away }),
+    ]);
+    const { skip, take } = toOffset(page);
+    const first = await find(working, skip, Math.min(take, Math.max(0, workingTotal - skip)));
+    const rest = await find(away, Math.max(0, skip - workingTotal), take - first.length);
+    return {
+      items: [...first, ...rest].map(toRosterEmployee),
+      page: page.page,
+      limit: page.limit,
+      total: workingTotal + awayTotal,
+    };
   }
 
   async findByUser(companyId: string, userId: string): Promise<EmployeeProfile | null> {
@@ -280,7 +300,7 @@ export class PrismaEmployeeDirectory implements EmployeeDirectory {
       allowCheckIns: row.allowCheckIns ?? row.company.allowCheckIns,
       selfEdit: {
         allowed: row.allowSelfEdit,
-        until: row.selfEditUntil ? row.selfEditUntil.toISOString().slice(0, 10) : null,
+        until: row.selfEditUntil?.toISOString() ?? null,
         days: row.company.selfEditDays,
       },
     };

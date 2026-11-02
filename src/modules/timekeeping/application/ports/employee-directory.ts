@@ -16,7 +16,7 @@ export interface EmployeeProfile {
   readonly enforceWorkSites: boolean;
   // Si puede registrar llegadas sin marcar entrada: lo suyo manda y, si no tiene, lo de la empresa
   readonly allowCheckIns: boolean;
-  // Permiso del admin para corregir sus horas: hasta que dia y cuantos dias hacia atras
+  // Permiso del admin para corregir sus horas: cuando vence y cuantos dias hacia atras
   readonly selfEdit: {
     readonly allowed: boolean;
     readonly until: string | null;

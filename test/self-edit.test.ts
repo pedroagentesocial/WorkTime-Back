@@ -41,7 +41,7 @@ async function setup() {
   const beto = await createEmployee(prisma, company.id, { firstName: 'Beto' });
   const asAdmin = bearer((await login(app, admin.email, DEFAULT_PASSWORD)).accessToken);
   const asAna = bearer((await login(app, ana.user.email, DEFAULT_PASSWORD)).accessToken);
-  return { app, company, ana: ana.employee, beto: beto.employee, asAdmin, asAna };
+  return { app, clock, company, ana: ana.employee, beto: beto.employee, asAdmin, asAna };
 }
 
 async function addEntry(
@@ -147,13 +147,19 @@ describe('El empleado corrige sus horas', () => {
     expect(tooMany.status).toBe(400);
   });
 
-  it('el permiso vence en su fecha', async () => {
-    const { app, company, ana, asAdmin, asAna } = await setup();
+  it('el permiso vence a los minutos que dio el admin, con la hora del servidor', async () => {
+    const { app, clock, company, ana, asAdmin, asAna } = await setup();
     const entry = await addEntry(company.id, ana.id, '2026-10-05', '08:00', '12:00');
-    await allow(app, asAdmin, ana.id, { selfEditUntil: '2026-10-06' });
+    await allow(app, asAdmin, ana.id, { selfEditMinutes: 10 });
 
     const employee = await get(app, asAdmin, `/company/employees/${ana.id}`);
-    expect(employee.body.data).toMatchObject({ allowSelfEdit: true, selfEditUntil: '2026-10-06' });
+    expect(employee.body.data).toMatchObject({
+      allowSelfEdit: true,
+      selfEditUntil: '2026-10-07T18:10:00.000Z',
+    });
+    await correct(app, asAna, entry, { clockOutAt: '2026-10-05T12:30:00-06:00' }).expect(200);
+
+    clock.advance(10 * 60_000);
     const res = await correct(app, asAna, entry, { clockOutAt: '2026-10-05T13:00:00-06:00' });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe('SELF_EDIT_NOT_ALLOWED');

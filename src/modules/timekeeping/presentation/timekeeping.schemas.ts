@@ -280,8 +280,8 @@ export const clockStatusSchema = z
     selfEdit: z
       .object({
         days: z.number().int().openapi({ description: 'Cuántos días hacia atrás puede corregir' }),
-        until: z.iso.date().nullable().openapi({
-          description: 'Último día del permiso; null = sin vencimiento',
+        until: z.iso.datetime().nullable().openapi({
+          description: 'Cuándo vence el permiso; null = sin vencimiento',
         }),
       })
       .or(z.null())

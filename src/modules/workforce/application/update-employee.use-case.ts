@@ -1,5 +1,6 @@
 import { companyIdOf, type Actor } from '#shared/application/actor.js';
 import type { ClientInfo } from '#shared/application/client-info.js';
+import type { Clock } from '#shared/application/ports/clock.js';
 import {
   SecurityEventType,
   type SecurityEventRecorder,
@@ -15,14 +16,22 @@ import type {
 } from './ports/employee.repository.js';
 import { WorkforceErrors } from './workforce-errors.js';
 
+export const MAX_SELF_EDIT_MINUTES = 365 * 24 * 60;
+
+// El admin da el permiso por un tiempo: el vencimiento lo calcula el servidor con su hora
+export interface EmployeeChanges extends Omit<EmployeePatch, 'selfEditUntil'> {
+  readonly selfEditMinutes?: number | null | undefined;
+}
+
 export interface UpdateEmployeeInput {
   readonly actor: Actor;
   readonly client: ClientInfo;
   readonly employeeId: string;
-  readonly patch: EmployeePatch;
+  readonly patch: EmployeeChanges;
 }
 
 interface Deps {
+  clock: Clock;
   employeeRepository: EmployeeRepository;
   securityEvents: SecurityEventRecorder;
   transactions: TransactionRunner;
@@ -52,7 +61,12 @@ export class UpdateEmployeeUseCase implements UseCase<UpdateEmployeeInput, Emplo
       }),
       ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
       ...(patch.allowSelfEdit !== undefined && { allowSelfEdit: patch.allowSelfEdit }),
-      ...(patch.selfEditUntil !== undefined && { selfEditUntil: patch.selfEditUntil }),
+      ...(patch.selfEditMinutes !== undefined && {
+        selfEditUntil:
+          patch.selfEditMinutes === null
+            ? null
+            : new Date(this.deps.clock.now().getTime() + patch.selfEditMinutes * 60_000),
+      }),
     };
     if (changes.timezone !== undefined) EmployeeRules.assertTimezone(changes.timezone);
     if (changes.dailyLimitMinutes !== undefined) DailyLimit.assertValid(changes.dailyLimitMinutes);

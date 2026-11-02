@@ -414,6 +414,21 @@ describe('GET /company/attendance/roster', () => {
     expect((await get(app, asAdmin, '/company/attendance/roster?status=otro')).status).toBe(400);
   });
 
+  it('pone primero a los que están trabajando, también entre páginas', async () => {
+    const { app, clock } = createTestApp();
+    const { asAdmin, asEmployee, employee, company } = await setup(app);
+    const first = await createEmployee(prisma, company.id, { lastName: 'Aaa' });
+    const second = await createEmployee(prisma, company.id, { lastName: 'Aab' });
+    setTime(clock, '2026-06-01T14:00:00Z');
+    await clockIn(app, asEmployee);
+
+    const one = await get(app, asAdmin, '/company/attendance/roster?limit=2');
+    expect(idsOf(one.body.data)).toEqual([employee.id, first.employee.id]);
+    expect(one.body.meta.total).toBe(3);
+    const two = await get(app, asAdmin, '/company/attendance/roster?limit=2&page=2');
+    expect(idsOf(two.body.data)).toEqual([second.employee.id]);
+  });
+
   it('solo muestra a los empleados de la propia empresa', async () => {
     const { app, clock } = createTestApp();
     const mine = await setup(app);

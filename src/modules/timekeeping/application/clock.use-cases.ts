@@ -215,7 +215,7 @@ export class GetClockStatusUseCase implements UseCase<Actor, ClockStatus> {
       pendingReports,
       canClockIn: openEntry === null && pendingReports.length === 0 && !dailyLimit?.reached,
       canCheckIn: profile.allowCheckIns,
-      selfEdit: selfEditActive(profile, localDateOf(now, profile.effectiveTimezone))
+      selfEdit: selfEditActive(profile, now)
         ? { days: profile.selfEdit.days, until: profile.selfEdit.until }
         : null,
     };

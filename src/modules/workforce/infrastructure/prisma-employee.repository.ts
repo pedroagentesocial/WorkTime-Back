@@ -183,9 +183,7 @@ export class PrismaEmployeeRepository implements EmployeeRepository {
             }),
             ...(patch.allowCheckIns !== undefined && { allowCheckIns: patch.allowCheckIns }),
             ...(patch.allowSelfEdit !== undefined && { allowSelfEdit: patch.allowSelfEdit }),
-            ...(patch.selfEditUntil !== undefined && {
-              selfEditUntil: toDbDate(patch.selfEditUntil),
-            }),
+            ...(patch.selfEditUntil !== undefined && { selfEditUntil: patch.selfEditUntil }),
           },
         });
       });
@@ -300,7 +298,7 @@ export function toView(row: EmployeeRow): EmployeeView {
     allowCheckIns: row.allowCheckIns,
     effectiveAllowCheckIns: row.allowCheckIns ?? row.company.allowCheckIns,
     allowSelfEdit: row.allowSelfEdit,
-    selfEditUntil: fromDbDate(row.selfEditUntil),
+    selfEditUntil: row.selfEditUntil,
     status: row.user.status,
     mustChangePassword: row.user.mustChangePassword,
     lastLoginAt: row.user.lastLoginAt,
